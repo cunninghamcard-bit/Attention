@@ -5,9 +5,9 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/cunninghamcard-bit/Attention/internal/extension"
 	"github.com/cunninghamcard-bit/Attention/internal/ai"
 	"github.com/cunninghamcard-bit/Attention/internal/execenv/local"
-	"github.com/cunninghamcard-bit/Attention/internal/extension"
 	"github.com/cunninghamcard-bit/Attention/internal/message"
 	"github.com/cunninghamcard-bit/Attention/internal/tool"
 	"github.com/cunninghamcard-bit/Attention/internal/tool/builtin"

@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"unicode/utf16"
 
-	"github.com/cunninghamcard-bit/Attention/internal/execenv"
 	"github.com/cunninghamcard-bit/Attention/internal/extension"
+	"github.com/cunninghamcard-bit/Attention/internal/execenv"
 	"github.com/cunninghamcard-bit/Attention/internal/render"
 	"github.com/cunninghamcard-bit/Attention/internal/tool"
 )

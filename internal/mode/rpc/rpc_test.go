@@ -8,18 +8,18 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cunninghamcard-bit/Attention/internal/orchestrator"
 	"github.com/cunninghamcard-bit/Attention/internal/ai"
-	"github.com/cunninghamcard-bit/Attention/internal/mode/compat"
 	"github.com/cunninghamcard-bit/Attention/internal/session"
 )
 
 func TestRunWritesSessionHeaderAndEventLines(t *testing.T) {
 	runner := &fakeRunner{}
-	events := []compat.Event{
+	events := []orchestrator.Event{
 		messageUpdateEvent("he"),
 		messageEndEvent("hello"),
 	}
-	runner.promptFunc = func(_ context.Context, input compat.PromptInput) (compat.PromptResult, error) {
+	runner.promptFunc = func(_ context.Context, input orchestrator.PromptInput) (orchestrator.PromptResult, error) {
 		if input.Text != "prompt" {
 			t.Fatalf("prompt input text = %q, want prompt", input.Text)
 		}
@@ -32,7 +32,7 @@ func TestRunWritesSessionHeaderAndEventLines(t *testing.T) {
 		for _, event := range events {
 			runner.subscriber(event)
 		}
-		return compat.PromptResult{Message: assistantMessage("hello")}, nil
+		return orchestrator.PromptResult{Message: assistantMessage("hello")}, nil
 	}
 
 	var out bytes.Buffer
@@ -63,7 +63,7 @@ func TestRunWritesSessionHeaderAndEventLines(t *testing.T) {
 		gotTypes = append(gotTypes, eventType)
 
 		switch eventType {
-		case compat.EventMessageUpdate:
+		case orchestrator.EventMessageUpdate:
 			if _, ok := payload["message"]; !ok {
 				t.Fatalf("message_update missing message: %s", line)
 			}
@@ -77,7 +77,7 @@ func TestRunWritesSessionHeaderAndEventLines(t *testing.T) {
 			if _, ok := payload["delta"]; ok {
 				t.Fatalf("message_update unexpectedly has legacy delta: %s", line)
 			}
-		case compat.EventMessageEnd:
+		case orchestrator.EventMessageEnd:
 			if _, ok := payload["message"]; !ok {
 				t.Fatalf("message_end missing message: %s", line)
 			}
@@ -88,8 +88,8 @@ func TestRunWritesSessionHeaderAndEventLines(t *testing.T) {
 	}
 
 	wantTypes := []string{
-		compat.EventMessageUpdate,
-		compat.EventMessageEnd,
+		orchestrator.EventMessageUpdate,
+		orchestrator.EventMessageEnd,
 	}
 	if !reflect.DeepEqual(gotTypes, wantTypes) {
 		t.Fatalf("event types = %v, want %v", gotTypes, wantTypes)
@@ -105,11 +105,11 @@ func TestEventJSONFromOrchestratorUsesPiNonStreamingShapes(t *testing.T) {
 		Content:    []ai.ContentBlock{{Type: ai.ContentText, Text: "done"}},
 	}
 
-	agentEnd := eventPayload(t, compat.Event{
-		Type:     compat.EventAgentEnd,
+	agentEnd := eventPayload(t, orchestrator.Event{
+		Type:     orchestrator.EventAgentEnd,
 		Messages: []ai.Message{msg},
 	})
-	if agentEnd["type"] != compat.EventAgentEnd {
+	if agentEnd["type"] != orchestrator.EventAgentEnd {
 		t.Fatalf("agent_end type = %v", agentEnd["type"])
 	}
 	messages := agentEnd["messages"].([]any)
@@ -120,12 +120,12 @@ func TestEventJSONFromOrchestratorUsesPiNonStreamingShapes(t *testing.T) {
 		t.Fatalf("agent_end unexpectedly has message: %v", agentEnd)
 	}
 
-	turnEnd := eventPayload(t, compat.Event{
-		Type:        compat.EventTurnEnd,
+	turnEnd := eventPayload(t, orchestrator.Event{
+		Type:        orchestrator.EventTurnEnd,
 		Message:     &msg,
 		ToolResults: []ai.Message{toolResult},
 	})
-	if turnEnd["type"] != compat.EventTurnEnd {
+	if turnEnd["type"] != orchestrator.EventTurnEnd {
 		t.Fatalf("turn_end type = %v", turnEnd["type"])
 	}
 	message := turnEnd["message"].(map[string]any)
@@ -137,8 +137,8 @@ func TestEventJSONFromOrchestratorUsesPiNonStreamingShapes(t *testing.T) {
 		t.Fatalf("turn_end toolResults = %v", toolResults)
 	}
 
-	toolStart := eventPayload(t, compat.Event{
-		Type:       compat.EventToolExecutionStart,
+	toolStart := eventPayload(t, orchestrator.Event{
+		Type:       orchestrator.EventToolExecutionStart,
 		ToolCallID: "call-1",
 		ToolName:   "shell",
 		Args:       map[string]any{"command": "pwd"},
@@ -151,8 +151,8 @@ func TestEventJSONFromOrchestratorUsesPiNonStreamingShapes(t *testing.T) {
 		t.Fatalf("tool_execution_start args = %v", args)
 	}
 
-	toolUpdate := eventPayload(t, compat.Event{
-		Type:          compat.EventToolExecutionUpdate,
+	toolUpdate := eventPayload(t, orchestrator.Event{
+		Type:          orchestrator.EventToolExecutionUpdate,
 		ToolCallID:    "call-1",
 		ToolName:      "shell",
 		Args:          map[string]any{"command": "pwd"},
@@ -166,8 +166,8 @@ func TestEventJSONFromOrchestratorUsesPiNonStreamingShapes(t *testing.T) {
 		t.Fatalf("tool_execution_update partialResult = %v", partialResult)
 	}
 
-	toolEnd := eventPayload(t, compat.Event{
-		Type:       compat.EventToolExecutionEnd,
+	toolEnd := eventPayload(t, orchestrator.Event{
+		Type:       orchestrator.EventToolExecutionEnd,
 		ToolCallID: "call-1",
 		ToolName:   "shell",
 		Result:     map[string]any{"stdout": "/tmp"},
@@ -189,14 +189,14 @@ func TestEventJSONFromOrchestratorUsesPiNonStreamingShapes(t *testing.T) {
 }
 
 func TestEventJSONFromOrchestratorUsesPiAutoRetryShapes(t *testing.T) {
-	start := eventPayload(t, compat.Event{
-		Type:         compat.EventAutoRetryStart,
+	start := eventPayload(t, orchestrator.Event{
+		Type:         orchestrator.EventAutoRetryStart,
 		Attempt:      2,
 		MaxAttempts:  3,
 		DelayMs:      200,
 		ErrorMessage: "503 unavailable",
 	})
-	if start["type"] != compat.EventAutoRetryStart ||
+	if start["type"] != orchestrator.EventAutoRetryStart ||
 		start["attempt"] != float64(2) ||
 		start["maxAttempts"] != float64(3) ||
 		start["delayMs"] != float64(200) ||
@@ -204,12 +204,12 @@ func TestEventJSONFromOrchestratorUsesPiAutoRetryShapes(t *testing.T) {
 		t.Fatalf("auto_retry_start payload = %v", start)
 	}
 
-	successEnd := eventPayload(t, compat.Event{
-		Type:    compat.EventAutoRetryEnd,
+	successEnd := eventPayload(t, orchestrator.Event{
+		Type:    orchestrator.EventAutoRetryEnd,
 		Success: true,
 		Attempt: 2,
 	})
-	if successEnd["type"] != compat.EventAutoRetryEnd ||
+	if successEnd["type"] != orchestrator.EventAutoRetryEnd ||
 		successEnd["success"] != true ||
 		successEnd["attempt"] != float64(2) {
 		t.Fatalf("auto_retry_end success payload = %v", successEnd)
@@ -218,13 +218,13 @@ func TestEventJSONFromOrchestratorUsesPiAutoRetryShapes(t *testing.T) {
 		t.Fatalf("auto_retry_end success unexpectedly has finalError: %v", successEnd)
 	}
 
-	failureEnd := eventPayload(t, compat.Event{
-		Type:       compat.EventAutoRetryEnd,
+	failureEnd := eventPayload(t, orchestrator.Event{
+		Type:       orchestrator.EventAutoRetryEnd,
 		Success:    false,
 		Attempt:    3,
 		FinalError: "still unavailable",
 	})
-	if failureEnd["type"] != compat.EventAutoRetryEnd ||
+	if failureEnd["type"] != orchestrator.EventAutoRetryEnd ||
 		failureEnd["success"] != false ||
 		failureEnd["attempt"] != float64(3) ||
 		failureEnd["finalError"] != "still unavailable" {
@@ -233,30 +233,30 @@ func TestEventJSONFromOrchestratorUsesPiAutoRetryShapes(t *testing.T) {
 }
 
 func TestEventJSONFromOrchestratorUsesPiModeLifecycleShapes(t *testing.T) {
-	thinking := eventPayload(t, compat.Event{
-		Type:  compat.EventThinkingLevelChanged,
+	thinking := eventPayload(t, orchestrator.Event{
+		Type:  orchestrator.EventThinkingLevelChanged,
 		Level: "high",
 	})
-	if thinking["type"] != compat.EventThinkingLevelChanged || thinking["level"] != "high" {
+	if thinking["type"] != orchestrator.EventThinkingLevelChanged || thinking["level"] != "high" {
 		t.Fatalf("thinking_level_changed payload = %v", thinking)
 	}
 
-	start := eventPayload(t, compat.Event{
-		Type:   compat.EventCompactionStart,
+	start := eventPayload(t, orchestrator.Event{
+		Type:   orchestrator.EventCompactionStart,
 		Reason: "manual",
 	})
-	if start["type"] != compat.EventCompactionStart || start["reason"] != "manual" {
+	if start["type"] != orchestrator.EventCompactionStart || start["reason"] != "manual" {
 		t.Fatalf("compaction_start payload = %v", start)
 	}
 
-	end := eventPayload(t, compat.Event{
-		Type:      compat.EventCompactionEnd,
+	end := eventPayload(t, orchestrator.Event{
+		Type:      orchestrator.EventCompactionEnd,
 		Reason:    "manual",
-		Result:    compat.CompactResult{Summary: "summary", FirstKeptEntryID: "first-kept", TokensBefore: 42},
+		Result:    orchestrator.CompactResult{Summary: "summary", FirstKeptEntryID: "first-kept", TokensBefore: 42},
 		Aborted:   false,
 		WillRetry: false,
 	})
-	if end["type"] != compat.EventCompactionEnd ||
+	if end["type"] != orchestrator.EventCompactionEnd ||
 		end["reason"] != "manual" ||
 		end["aborted"] != false ||
 		end["willRetry"] != false {
@@ -269,8 +269,8 @@ func TestEventJSONFromOrchestratorUsesPiModeLifecycleShapes(t *testing.T) {
 		t.Fatalf("compaction_end result = %v", result)
 	}
 
-	failureEnd := eventPayload(t, compat.Event{
-		Type:         compat.EventCompactionEnd,
+	failureEnd := eventPayload(t, orchestrator.Event{
+		Type:         orchestrator.EventCompactionEnd,
 		Reason:       "overflow",
 		Aborted:      false,
 		WillRetry:    false,
@@ -283,8 +283,8 @@ func TestEventJSONFromOrchestratorUsesPiModeLifecycleShapes(t *testing.T) {
 		t.Fatalf("compaction_end failure unexpectedly has result: %v", failureEnd)
 	}
 
-	emptyQueue := eventPayload(t, compat.Event{
-		Type: compat.EventQueueUpdate,
+	emptyQueue := eventPayload(t, orchestrator.Event{
+		Type: orchestrator.EventQueueUpdate,
 	})
 	steering := emptyQueue["steering"].([]any)
 	followUp := emptyQueue["followUp"].([]any)
@@ -292,8 +292,8 @@ func TestEventJSONFromOrchestratorUsesPiModeLifecycleShapes(t *testing.T) {
 		t.Fatalf("empty queue_update payload = %v", emptyQueue)
 	}
 
-	queue := eventPayload(t, compat.Event{
-		Type:     compat.EventQueueUpdate,
+	queue := eventPayload(t, orchestrator.Event{
+		Type:     orchestrator.EventQueueUpdate,
 		Steering: []string{"steer"},
 		FollowUp: []string{"follow"},
 	})
@@ -301,28 +301,28 @@ func TestEventJSONFromOrchestratorUsesPiModeLifecycleShapes(t *testing.T) {
 		t.Fatalf("queue_update payload = %v", queue)
 	}
 
-	savePoint := eventPayload(t, compat.Event{
-		Type:                compat.EventSavePoint,
+	savePoint := eventPayload(t, orchestrator.Event{
+		Type:                orchestrator.EventSavePoint,
 		HadPendingMutations: true,
 	})
-	if savePoint["type"] != compat.EventSavePoint ||
+	if savePoint["type"] != orchestrator.EventSavePoint ||
 		savePoint["hadPendingMutations"] != true {
 		t.Fatalf("save_point payload = %v", savePoint)
 	}
 
-	sessionInfo := eventPayload(t, compat.Event{
-		Type: compat.EventSessionInfoChanged,
+	sessionInfo := eventPayload(t, orchestrator.Event{
+		Type: orchestrator.EventSessionInfoChanged,
 		Name: "session",
 	})
-	if sessionInfo["type"] != compat.EventSessionInfoChanged || sessionInfo["name"] != "session" {
+	if sessionInfo["type"] != orchestrator.EventSessionInfoChanged || sessionInfo["name"] != "session" {
 		t.Fatalf("session_info_changed payload = %v", sessionInfo)
 	}
 
-	settled := eventPayload(t, compat.Event{
-		Type:          compat.EventSettled,
+	settled := eventPayload(t, orchestrator.Event{
+		Type:          orchestrator.EventSettled,
 		NextTurnCount: 2,
 	})
-	if settled["type"] != compat.EventSettled ||
+	if settled["type"] != orchestrator.EventSettled ||
 		settled["nextTurnCount"] != float64(2) {
 		t.Fatalf("settled payload = %v", settled)
 	}
@@ -400,8 +400,8 @@ func TestMapAssistantMessageEventCompleteIsSkipped(t *testing.T) {
 func TestEventJSONSkipsUnmappableMessageUpdate(t *testing.T) {
 	// message_update without a mapped stream-event type has no faithful pi event.
 	toolCallMsg := assistantMessage("x")
-	_, ok := eventJSONFromOrchestrator(compat.Event{
-		Type:    compat.EventMessageUpdate,
+	_, ok := eventJSONFromOrchestrator(orchestrator.Event{
+		Type:    orchestrator.EventMessageUpdate,
 		Message: &toolCallMsg,
 		Delta: &ai.StreamEvent{
 			Type:    ai.EventUnknown,
@@ -415,26 +415,26 @@ func TestEventJSONSkipsUnmappableMessageUpdate(t *testing.T) {
 }
 
 func TestEventJSONMapsResourcesUpdate(t *testing.T) {
-	payload := eventPayload(t, compat.Event{
-		Type: compat.EventResourcesUpdate,
-		Resources: compat.ResourcesSnapshot{
-			Skills: []compat.ResourceSummary{
+	payload := eventPayload(t, orchestrator.Event{
+		Type: orchestrator.EventResourcesUpdate,
+		Resources: orchestrator.ResourcesSnapshot{
+			Skills: []orchestrator.ResourceSummary{
 				{Name: "review", Description: "Review changes"},
 			},
-			PromptTemplates: []compat.ResourceSummary{
+			PromptTemplates: []orchestrator.ResourceSummary{
 				{Name: "deploy", Description: "Deploy app"},
 			},
 		},
-		PreviousResources: compat.ResourcesSnapshot{
-			Skills: []compat.ResourceSummary{
+		PreviousResources: orchestrator.ResourcesSnapshot{
+			Skills: []orchestrator.ResourceSummary{
 				{Name: "old", Description: "Old skill"},
 			},
-			PromptTemplates: []compat.ResourceSummary{},
+			PromptTemplates: []orchestrator.ResourceSummary{},
 		},
 	})
 
-	if payload["type"] != compat.EventResourcesUpdate {
-		t.Fatalf("type = %v, want %q", payload["type"], compat.EventResourcesUpdate)
+	if payload["type"] != orchestrator.EventResourcesUpdate {
+		t.Fatalf("type = %v, want %q", payload["type"], orchestrator.EventResourcesUpdate)
 	}
 	resources := payload["resources"].(map[string]any)
 	skills := resources["skills"].([]any)
@@ -468,7 +468,7 @@ func marshalToMap(t *testing.T, value any) map[string]any {
 	return payload
 }
 
-func eventPayload(t *testing.T, ev compat.Event) map[string]any {
+func eventPayload(t *testing.T, ev orchestrator.Event) map[string]any {
 	t.Helper()
 
 	value, ok := eventJSONFromOrchestrator(ev)
@@ -497,9 +497,9 @@ func unmarshalLine(t *testing.T, line string) map[string]any {
 }
 
 type fakeRunner struct {
-	subscriber func(compat.Event)
+	subscriber func(orchestrator.Event)
 	canceled   bool
-	promptFunc func(context.Context, compat.PromptInput) (compat.PromptResult, error)
+	promptFunc func(context.Context, orchestrator.PromptInput) (orchestrator.PromptResult, error)
 	metadata   session.Metadata
 }
 
@@ -507,7 +507,7 @@ func (f *fakeRunner) SessionMetadata() session.Metadata {
 	return f.metadata
 }
 
-func (f *fakeRunner) Subscribe(fn func(compat.Event)) func() {
+func (f *fakeRunner) Subscribe(fn func(orchestrator.Event)) func() {
 	f.subscriber = fn
 	return func() {
 		f.canceled = true
@@ -516,15 +516,15 @@ func (f *fakeRunner) Subscribe(fn func(compat.Event)) func() {
 
 func (f *fakeRunner) Prompt(
 	ctx context.Context,
-	input compat.PromptInput,
-) (compat.PromptResult, error) {
+	input orchestrator.PromptInput,
+) (orchestrator.PromptResult, error) {
 	return f.promptFunc(ctx, input)
 }
 
-func messageUpdateEvent(text string) compat.Event {
+func messageUpdateEvent(text string) orchestrator.Event {
 	msg := assistantMessage(text)
-	return compat.Event{
-		Type:    compat.EventMessageUpdate,
+	return orchestrator.Event{
+		Type:    orchestrator.EventMessageUpdate,
 		Message: &msg,
 		Delta: &ai.StreamEvent{
 			Type:    ai.EventTextDelta,
@@ -535,10 +535,10 @@ func messageUpdateEvent(text string) compat.Event {
 	}
 }
 
-func messageEndEvent(text string) compat.Event {
+func messageEndEvent(text string) orchestrator.Event {
 	msg := assistantMessage(text)
-	return compat.Event{
-		Type:    compat.EventMessageEnd,
+	return orchestrator.Event{
+		Type:    orchestrator.EventMessageEnd,
 		Message: &msg,
 	}
 }

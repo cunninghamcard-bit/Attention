@@ -10,20 +10,20 @@ import (
 	"os"
 	"sync"
 
+	"github.com/cunninghamcard-bit/Attention/internal/orchestrator"
 	"github.com/cunninghamcard-bit/Attention/internal/ai"
-	"github.com/cunninghamcard-bit/Attention/internal/mode/compat"
 	"github.com/cunninghamcard-bit/Attention/internal/session"
 )
 
 type promptRunner interface {
-	Subscribe(func(compat.Event)) func()
-	Prompt(context.Context, compat.PromptInput) (compat.PromptResult, error)
+	Subscribe(func(orchestrator.Event)) func()
+	Prompt(context.Context, orchestrator.PromptInput) (orchestrator.PromptResult, error)
 	SessionMetadata() session.Metadata
 }
 
-// Run sends each prompt sequentially through the runner and writes
+// Run sends each prompt sequentially through the orchestrator and writes
 // session/event JSON lines.
-func Run(ctx context.Context, orch promptRunner, prompts []string) error {
+func Run(ctx context.Context, orch *orchestrator.Orchestrator, prompts []string) error {
 	return run(ctx, orch, prompts, os.Stdout)
 }
 
@@ -50,7 +50,7 @@ func run(ctx context.Context, orch promptRunner, prompts []string, stdout io.Wri
 		return err
 	}
 
-	cancel := orch.Subscribe(func(ev compat.Event) {
+	cancel := orch.Subscribe(func(ev orchestrator.Event) {
 		if value, ok := eventJSONFromOrchestrator(ev); ok {
 			_ = writer.WriteJSON(value)
 		}
@@ -58,7 +58,7 @@ func run(ctx context.Context, orch promptRunner, prompts []string, stdout io.Wri
 	defer cancel()
 
 	for _, prompt := range prompts {
-		if _, promptErr := orch.Prompt(ctx, compat.PromptInput{
+		if _, promptErr := orch.Prompt(ctx, orchestrator.PromptInput{
 			Text:   prompt,
 			Source: "rpc",
 		}); promptErr != nil {
@@ -188,9 +188,9 @@ type settledEventJSON struct {
 }
 
 type resourcesUpdateEventJSON struct {
-	Type              string                   `json:"type"`
-	Resources         compat.ResourcesSnapshot `json:"resources"`
-	PreviousResources compat.ResourcesSnapshot `json:"previousResources"`
+	Type              string                         `json:"type"`
+	Resources         orchestrator.ResourcesSnapshot `json:"resources"`
+	PreviousResources orchestrator.ResourcesSnapshot `json:"previousResources"`
 }
 
 // message_update + the pi AssistantMessageEvent union it carries
@@ -287,31 +287,31 @@ func mapAssistantMessageEvent(ev *ai.StreamEvent) (any, bool) {
 // eventJSONFromOrchestrator serializes an orchestrator event to its pi
 // AgentEvent shape. ok is false when the event maps to no faithful pi event
 // (only message_update, when its delta is not mappable) and must not be emitted.
-func eventJSONFromOrchestrator(ev compat.Event) (any, bool) {
+func eventJSONFromOrchestrator(ev orchestrator.Event) (any, bool) {
 	// pi AgentEvent union: .agents/references/pi/packages/agent/src/types.ts:403-418.
 	// pi rpc-client forwards non-response lines as AgentEvent:
 	// .agents/references/pi/packages/coding-agent/src/modes/rpc/rpc-client.ts:482-497.
 	switch ev.Type {
-	case compat.EventAgentStart:
+	case orchestrator.EventAgentStart:
 		// pi: { type: "agent_start" } (types.ts:405).
 		return typeOnlyEventJSON{Type: ev.Type}, true
-	case compat.EventAgentEnd:
+	case orchestrator.EventAgentEnd:
 		// pi: { type: "agent_end"; messages: AgentMessage[] } (types.ts:406).
 		return agentEndEventJSON{Type: ev.Type, Messages: nonnilMessages(ev.Messages)}, true
-	case compat.EventTurnStart:
+	case orchestrator.EventTurnStart:
 		// pi: { type: "turn_start" } (types.ts:408).
 		return typeOnlyEventJSON{Type: ev.Type}, true
-	case compat.EventTurnEnd:
+	case orchestrator.EventTurnEnd:
 		// pi: { type: "turn_end"; message: AgentMessage; toolResults: ToolResultMessage[] } (types.ts:409).
 		return turnEndEventJSON{
 			Type:        ev.Type,
 			Message:     ev.Message,
 			ToolResults: nonnilMessages(ev.ToolResults),
 		}, true
-	case compat.EventMessageStart:
+	case orchestrator.EventMessageStart:
 		// pi: { type: "message_start"; message: AgentMessage } (types.ts:411).
 		return messageEventJSON{Type: ev.Type, Message: ev.Message}, true
-	case compat.EventMessageUpdate:
+	case orchestrator.EventMessageUpdate:
 		// pi: { type: "message_update"; message; assistantMessageEvent } (types.ts:413).
 		// Skip when the streaming delta has no faithful pi mapping.
 		assistantEvent, ok := mapAssistantMessageEvent(ev.Delta)
@@ -323,10 +323,10 @@ func eventJSONFromOrchestrator(ev compat.Event) (any, bool) {
 			Message:               ev.Message,
 			AssistantMessageEvent: assistantEvent,
 		}, true
-	case compat.EventMessageEnd:
+	case orchestrator.EventMessageEnd:
 		// pi: { type: "message_end"; message: AgentMessage } (types.ts:414).
 		return messageEventJSON{Type: ev.Type, Message: ev.Message}, true
-	case compat.EventToolExecutionStart:
+	case orchestrator.EventToolExecutionStart:
 		// pi: { type: "tool_execution_start"; toolCallId; toolName; args } (types.ts:416).
 		return toolExecutionStartEventJSON{
 			Type:       ev.Type,
@@ -334,7 +334,7 @@ func eventJSONFromOrchestrator(ev compat.Event) (any, bool) {
 			ToolName:   ev.ToolName,
 			Args:       ev.Args,
 		}, true
-	case compat.EventToolExecutionUpdate:
+	case orchestrator.EventToolExecutionUpdate:
 		// pi: { type: "tool_execution_update"; toolCallId; toolName; args; partialResult } (types.ts:417).
 		return toolExecutionUpdateEventJSON{
 			Type:          ev.Type,
@@ -343,7 +343,7 @@ func eventJSONFromOrchestrator(ev compat.Event) (any, bool) {
 			Args:          ev.Args,
 			PartialResult: ev.PartialResult,
 		}, true
-	case compat.EventToolExecutionEnd:
+	case orchestrator.EventToolExecutionEnd:
 		// pi: { type: "tool_execution_end"; toolCallId; toolName; result; isError } (types.ts:418).
 		return toolExecutionEndEventJSON{
 			Type:       ev.Type,
@@ -352,7 +352,7 @@ func eventJSONFromOrchestrator(ev compat.Event) (any, bool) {
 			Result:     ev.Result,
 			IsError:    ev.IsError,
 		}, true
-	case compat.EventAutoRetryStart:
+	case orchestrator.EventAutoRetryStart:
 		return autoRetryStartEventJSON{
 			Type:         ev.Type,
 			Attempt:      ev.Attempt,
@@ -360,24 +360,24 @@ func eventJSONFromOrchestrator(ev compat.Event) (any, bool) {
 			DelayMs:      ev.DelayMs,
 			ErrorMessage: ev.ErrorMessage,
 		}, true
-	case compat.EventAutoRetryEnd:
+	case orchestrator.EventAutoRetryEnd:
 		return autoRetryEndEventJSON{
 			Type:       ev.Type,
 			Success:    ev.Success,
 			Attempt:    ev.Attempt,
 			FinalError: ev.FinalError,
 		}, true
-	case compat.EventThinkingLevelChanged:
+	case orchestrator.EventThinkingLevelChanged:
 		return thinkingLevelChangedEventJSON{
 			Type:  ev.Type,
 			Level: ev.Level,
 		}, true
-	case compat.EventCompactionStart:
+	case orchestrator.EventCompactionStart:
 		return compactionStartEventJSON{
 			Type:   ev.Type,
 			Reason: ev.Reason,
 		}, true
-	case compat.EventCompactionEnd:
+	case orchestrator.EventCompactionEnd:
 		return compactionEndEventJSON{
 			Type:         ev.Type,
 			Reason:       ev.Reason,
@@ -386,28 +386,28 @@ func eventJSONFromOrchestrator(ev compat.Event) (any, bool) {
 			WillRetry:    ev.WillRetry,
 			ErrorMessage: ev.ErrorMessage,
 		}, true
-	case compat.EventQueueUpdate:
+	case orchestrator.EventQueueUpdate:
 		return queueUpdateEventJSON{
 			Type:     ev.Type,
 			Steering: nonnilStrings(ev.Steering),
 			FollowUp: nonnilStrings(ev.FollowUp),
 		}, true
-	case compat.EventSavePoint:
+	case orchestrator.EventSavePoint:
 		return savePointEventJSON{
 			Type:                ev.Type,
 			HadPendingMutations: ev.HadPendingMutations,
 		}, true
-	case compat.EventSessionInfoChanged:
+	case orchestrator.EventSessionInfoChanged:
 		return sessionInfoChangedEventJSON{
 			Type: ev.Type,
 			Name: ev.Name,
 		}, true
-	case compat.EventSettled:
+	case orchestrator.EventSettled:
 		return settledEventJSON{
 			Type:          ev.Type,
 			NextTurnCount: ev.NextTurnCount,
 		}, true
-	case compat.EventResourcesUpdate:
+	case orchestrator.EventResourcesUpdate:
 		return resourcesUpdateEventJSON{
 			Type:              ev.Type,
 			Resources:         ev.Resources,
@@ -422,14 +422,14 @@ func compactionResultPayload(result any) any {
 	switch r := result.(type) {
 	case nil:
 		return nil
-	case compat.CompactResult:
+	case orchestrator.CompactResult:
 		return compactionResultJSON{
 			Summary:          r.Summary,
 			FirstKeptEntryID: string(r.FirstKeptEntryID),
 			TokensBefore:     r.TokensBefore,
 			Details:          r.Details,
 		}
-	case *compat.CompactResult:
+	case *orchestrator.CompactResult:
 		if r == nil {
 			return nil
 		}

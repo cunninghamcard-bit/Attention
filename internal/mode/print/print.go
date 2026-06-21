@@ -8,12 +8,12 @@ import (
 	"io"
 	"os"
 
+	"github.com/cunninghamcard-bit/Attention/internal/orchestrator"
 	"github.com/cunninghamcard-bit/Attention/internal/ai"
-	"github.com/cunninghamcard-bit/Attention/internal/mode/compat"
 )
 
 type promptRunner interface {
-	Prompt(context.Context, compat.PromptInput) (compat.PromptResult, error)
+	Prompt(context.Context, orchestrator.PromptInput) (orchestrator.PromptResult, error)
 }
 
 // Run sends each prompt sequentially through the orchestrator and writes the
@@ -25,10 +25,10 @@ func Run(ctx context.Context, orch promptRunner, prompts []string) error {
 }
 
 func run(ctx context.Context, orch promptRunner, prompts []string, stdout io.Writer) error {
-	var result compat.PromptResult
+	var result orchestrator.PromptResult
 	for _, prompt := range prompts {
 		var err error
-		result, err = orch.Prompt(ctx, compat.PromptInput{Text: prompt})
+		result, err = orch.Prompt(ctx, orchestrator.PromptInput{Text: prompt})
 		if err != nil {
 			return err
 		}

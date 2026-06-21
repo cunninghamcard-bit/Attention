@@ -14,11 +14,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cunninghamcard-bit/Attention/internal/extension"
 	"github.com/cunninghamcard-bit/Attention/internal/ai"
 	"github.com/cunninghamcard-bit/Attention/internal/config"
 	"github.com/cunninghamcard-bit/Attention/internal/execenv"
 	"github.com/cunninghamcard-bit/Attention/internal/execenv/local"
-	"github.com/cunninghamcard-bit/Attention/internal/extension"
 	"github.com/cunninghamcard-bit/Attention/internal/tool"
 	"github.com/cunninghamcard-bit/Attention/internal/tool/builtin"
 )

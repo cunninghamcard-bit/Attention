@@ -14,8 +14,6 @@ type CreateOptions struct {
 	ID                string
 	CWD               string
 	ParentSessionPath string
-	ParentRef         string
-	SpawnedBy         *SpawnedBy
 }
 
 type Metadata struct {
@@ -27,31 +25,12 @@ type Metadata struct {
 	Modified          time.Time
 	Path              string
 	ParentSessionPath string
-	// 会话树（D23）。旧会话文件无此字段，解码为零值。
-	ParentRef string     `json:"parentRef,omitempty"`
-	SpawnedBy *SpawnedBy `json:"spawnedBy,omitempty"`
-}
-
-type SpawnedBy struct {
-	SessionID  string `json:"sessionId"`
-	RunID      string `json:"runId,omitempty"`
-	ToolCallID string `json:"toolCallId,omitempty"`
-}
-
-func cloneSpawnedBy(in *SpawnedBy) *SpawnedBy {
-	if in == nil {
-		return nil
-	}
-	out := *in
-	return &out
 }
 
 type JsonlSessionCreateOptions struct {
 	ID                string
 	CWD               string
 	ParentSessionPath string
-	ParentRef         string
-	SpawnedBy         *SpawnedBy
 }
 
 type JsonlSessionListOptions struct {
@@ -71,8 +50,6 @@ type JsonlSessionForkOptions struct {
 	ID                      string
 	CWD                     string
 	ParentSessionPath       string
-	ParentRef               string
-	SpawnedBy               *SpawnedBy
 	SkipConversationRestore bool
 }
 

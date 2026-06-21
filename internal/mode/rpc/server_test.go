@@ -11,15 +11,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cunninghamcard-bit/Attention/internal/extension"
+	"github.com/cunninghamcard-bit/Attention/internal/orchestrator"
 	"github.com/cunninghamcard-bit/Attention/internal/agentloop"
 	"github.com/cunninghamcard-bit/Attention/internal/ai"
-	"github.com/cunninghamcard-bit/Attention/internal/mode/compat"
 	"github.com/cunninghamcard-bit/Attention/internal/resource"
 )
 
 func TestServeWritesResponsesWithoutHeader(t *testing.T) {
 	target := &fakeTarget{
-		snapshot: compat.Snapshot{
+		snapshot: orchestrator.Snapshot{
 			Model:         ai.Model{Provider: "anthropic", ID: "claude-sonnet-4-5"},
 			ThinkingLevel: agentloop.ThinkingMedium,
 			SessionID:     "sess-1",
@@ -88,14 +89,14 @@ func TestServeEmitsSessionShutdownOnExit(t *testing.T) {
 
 func TestServeGetSessionStatsResponseShape(t *testing.T) {
 	target := &fakeTarget{
-		sessionStats: compat.SessionStats{
+		sessionStats: orchestrator.SessionStats{
 			SessionID:         "sess-1",
 			UserMessages:      2,
 			AssistantMessages: 3,
 			ToolCalls:         4,
 			ToolResults:       5,
 			TotalMessages:     6,
-			Tokens: compat.SessionStatsTokens{
+			Tokens: orchestrator.SessionStatsTokens{
 				Input:      7,
 				Output:     8,
 				CacheRead:  9,
@@ -103,7 +104,7 @@ func TestServeGetSessionStatsResponseShape(t *testing.T) {
 				Total:      34,
 			},
 			Cost: 1.75,
-			ContextUsage: &compat.ContextUsage{
+			ContextUsage: &extension.ContextUsage{
 				Tokens:        34,
 				ContextWindow: 200,
 				Percent:       17,
@@ -161,7 +162,7 @@ func TestServeGetSessionStatsResponseShape(t *testing.T) {
 
 func TestServeGetSessionStatsOmitsNilContextUsage(t *testing.T) {
 	target := &fakeTarget{
-		sessionStats: compat.SessionStats{
+		sessionStats: orchestrator.SessionStats{
 			SessionID: "sess-1",
 		},
 	}
@@ -215,7 +216,7 @@ func TestServeSetModelUnknownIsError(t *testing.T) {
 
 func TestServePromptIsAsyncAndStreamsEvents(t *testing.T) {
 	target := &fakeTarget{}
-	target.promptFunc = func(_ context.Context, input compat.PromptInput) (compat.PromptResult, error) {
+	target.promptFunc = func(_ context.Context, input orchestrator.PromptInput) (orchestrator.PromptResult, error) {
 		if input.Source != "rpc" {
 			t.Errorf("prompt source = %q, want rpc", input.Source)
 		}
@@ -223,8 +224,8 @@ func TestServePromptIsAsyncAndStreamsEvents(t *testing.T) {
 			input.PreflightResult(true) // emits the success response (pi preflight)
 		}
 		msg := assistantMessage("hi")
-		target.subscriber(compat.Event{Type: compat.EventMessageEnd, Message: &msg})
-		return compat.PromptResult{Message: msg}, nil
+		target.subscriber(orchestrator.Event{Type: orchestrator.EventMessageEnd, Message: &msg})
+		return orchestrator.PromptResult{Message: msg}, nil
 	}
 	stdin := strings.NewReader(`{"id":"p","type":"prompt","message":"hello"}` + "\n")
 
@@ -249,7 +250,7 @@ func TestServePromptIsAsyncAndStreamsEvents(t *testing.T) {
 			if l["command"] == "prompt" && l["success"] == true {
 				sawResponse = true
 			}
-		case compat.EventMessageEnd:
+		case orchestrator.EventMessageEnd:
 			sawEvent = true
 		}
 	}
@@ -260,11 +261,11 @@ func TestServePromptIsAsyncAndStreamsEvents(t *testing.T) {
 
 func TestServePromptImagesAndStreamingBehavior(t *testing.T) {
 	target := &fakeTarget{}
-	target.promptFunc = func(_ context.Context, input compat.PromptInput) (compat.PromptResult, error) {
+	target.promptFunc = func(_ context.Context, input orchestrator.PromptInput) (orchestrator.PromptResult, error) {
 		if input.PreflightResult != nil {
 			input.PreflightResult(true)
 		}
-		return compat.PromptResult{}, nil
+		return orchestrator.PromptResult{}, nil
 	}
 	stdin := strings.NewReader(
 		`{"id":"p","type":"prompt","message":"hello","streamingBehavior":"followUp","images":[` +
@@ -353,7 +354,7 @@ func TestServeThinkingLevelAcceptsPiLevels(t *testing.T) {
 
 func TestServeCycleModelResponseShape(t *testing.T) {
 	target := &fakeTarget{
-		cycleModelResult: compat.ModelCycleResult{
+		cycleModelResult: orchestrator.ModelCycleResult{
 			Model: ai.Model{
 				ID:       "model-a",
 				Name:     "Model A",
@@ -631,7 +632,7 @@ func TestServeForkResponseShape(t *testing.T) {
 
 func TestServeGetForkMessagesResponseShape(t *testing.T) {
 	target := &fakeTarget{
-		forkMessages: []compat.ForkMessage{
+		forkMessages: []orchestrator.ForkMessage{
 			{EntryID: "entry-1", Text: "first"},
 			{EntryID: "entry-2", Text: "second"},
 		},
@@ -659,7 +660,7 @@ func TestServeGetForkMessagesResponseShape(t *testing.T) {
 
 func TestServeGetCommandsResponseShape(t *testing.T) {
 	target := &fakeTarget{
-		slashCommands: []compat.SlashCommand{
+		slashCommands: []orchestrator.SlashCommand{
 			{
 				Name:   "run",
 				Source: "extension",
@@ -779,7 +780,7 @@ func TestServeRetryAndCompactionToggleCommandsOmitData(t *testing.T) {
 
 func TestServeBashResponseShapeAndCommandField(t *testing.T) {
 	target := &fakeTarget{
-		bashResult: compat.BashResult{
+		bashResult: orchestrator.BashResult{
 			Output:         "partial\n",
 			Cancelled:      true,
 			Truncated:      true,
@@ -884,14 +885,14 @@ func TestServeQueueModeCommandsOmitDataAndCallSetters(t *testing.T) {
 			t.Fatalf("response included data: %v", resp)
 		}
 	}
-	if target.setSteeringModeCalls != 1 || target.steeringMode != compat.QueueModeAll {
+	if target.setSteeringModeCalls != 1 || target.steeringMode != orchestrator.QueueModeAll {
 		t.Fatalf(
 			"SetSteeringMode calls/mode = %d/%q, want 1/all",
 			target.setSteeringModeCalls,
 			target.steeringMode,
 		)
 	}
-	if target.setFollowUpModeCalls != 1 || target.followUpMode != compat.QueueModeOneAtATime {
+	if target.setFollowUpModeCalls != 1 || target.followUpMode != orchestrator.QueueModeOneAtATime {
 		t.Fatalf(
 			"SetFollowUpMode calls/mode = %d/%q, want 1/one-at-a-time",
 			target.setFollowUpModeCalls,
@@ -1457,19 +1458,19 @@ func assertTextImageContent(t *testing.T, content []ai.ContentBlock, text, data,
 
 type fakeTarget struct {
 	mu                     sync.Mutex
-	subscriber             func(compat.Event)
+	subscriber             func(orchestrator.Event)
 	canceled               bool
-	snapshot               compat.Snapshot
-	promptFunc             func(context.Context, compat.PromptInput) (compat.PromptResult, error)
+	snapshot               orchestrator.Snapshot
+	promptFunc             func(context.Context, orchestrator.PromptInput) (orchestrator.PromptResult, error)
 	promptCalls            int
-	promptInputs           []compat.PromptInput
+	promptInputs           []orchestrator.PromptInput
 	steerCalls             int
-	steerInputs            []compat.UserInput
+	steerInputs            []orchestrator.UserInput
 	followUpCalls          int
-	followUpInputs         []compat.UserInput
+	followUpInputs         []orchestrator.UserInput
 	setModelCalls          int
 	thinkingCalls          int
-	cycleModelResult       compat.ModelCycleResult
+	cycleModelResult       orchestrator.ModelCycleResult
 	cycleModelOK           bool
 	cycleModelCalls        int
 	cycleThinkingLevel     agentloop.ThinkingLevel
@@ -1484,7 +1485,7 @@ type fakeTarget struct {
 	abortBashCalls         int
 	executeBashCalls       int
 	bashCommand            string
-	bashResult             compat.BashResult
+	bashResult             orchestrator.BashResult
 	bashErr                error
 	exportHTMLCalls        int
 	exportHTMLOutputPath   string
@@ -1506,34 +1507,34 @@ type fakeTarget struct {
 	cloneCalls             int
 	cloneCancelled         bool
 	cloneErr               error
-	forkMessages           []compat.ForkMessage
+	forkMessages           []orchestrator.ForkMessage
 	shutdownCalls          int
 	shutdownReason         string
 	waitIdleCalls          int
 	compactCalls           int
-	sessionStats           compat.SessionStats
-	slashCommands          []compat.SlashCommand
+	sessionStats           orchestrator.SessionStats
+	slashCommands          []orchestrator.SlashCommand
 	setSteeringModeCalls   int
-	steeringMode           compat.QueueMode
+	steeringMode           orchestrator.QueueMode
 	setFollowUpModeCalls   int
-	followUpMode           compat.QueueMode
+	followUpMode           orchestrator.QueueMode
 	setAutoRetryCalls      int
 	autoRetryEnabled       bool
 	setAutoCompactionCalls int
 	autoCompactionEnabled  bool
-	uiContexts             []compat.UIContext
+	uiContexts             []extension.UIContext
 }
 
-func (f *fakeTarget) Subscribe(fn func(compat.Event)) func() {
+func (f *fakeTarget) Subscribe(fn func(orchestrator.Event)) func() {
 	f.subscriber = fn
 	return func() { f.canceled = true }
 }
 
-func (f *fakeTarget) SetUIContext(ui compat.UIContext) {
+func (f *fakeTarget) SetUIContext(ui extension.UIContext) {
 	f.uiContexts = append(f.uiContexts, ui)
 }
 
-func (f *fakeTarget) Prompt(ctx context.Context, input compat.PromptInput) (compat.PromptResult, error) {
+func (f *fakeTarget) Prompt(ctx context.Context, input orchestrator.PromptInput) (orchestrator.PromptResult, error) {
 	f.mu.Lock()
 	f.promptCalls++
 	f.promptInputs = append(f.promptInputs, input)
@@ -1541,31 +1542,31 @@ func (f *fakeTarget) Prompt(ctx context.Context, input compat.PromptInput) (comp
 	if f.promptFunc != nil {
 		return f.promptFunc(ctx, input)
 	}
-	return compat.PromptResult{}, nil
+	return orchestrator.PromptResult{}, nil
 }
 
-func (f *fakeTarget) Steer(_ context.Context, input compat.UserInput) error {
+func (f *fakeTarget) Steer(_ context.Context, input orchestrator.UserInput) error {
 	f.steerCalls++
 	f.steerInputs = append(f.steerInputs, input)
 	return nil
 }
 
-func (f *fakeTarget) FollowUp(_ context.Context, input compat.UserInput) error {
+func (f *fakeTarget) FollowUp(_ context.Context, input orchestrator.UserInput) error {
 	f.followUpCalls++
 	f.followUpInputs = append(f.followUpInputs, input)
 	return nil
 }
 
-func (f *fakeTarget) Abort(context.Context) (compat.AbortResult, error) {
+func (f *fakeTarget) Abort(context.Context) (orchestrator.AbortResult, error) {
 	f.abortCalls++
-	return compat.AbortResult{}, nil
+	return orchestrator.AbortResult{}, nil
 }
 
 func (f *fakeTarget) AbortRetry() {
 	f.abortRetryCalls++
 }
 
-func (f *fakeTarget) ExecuteBash(_ context.Context, command string) (compat.BashResult, error) {
+func (f *fakeTarget) ExecuteBash(_ context.Context, command string) (orchestrator.BashResult, error) {
 	f.executeBashCalls++
 	f.bashCommand = command
 	return f.bashResult, f.bashErr
@@ -1604,8 +1605,8 @@ func (f *fakeTarget) Clone(context.Context) (bool, error) {
 	return f.cloneCancelled, f.cloneErr
 }
 
-func (f *fakeTarget) ForkMessages() []compat.ForkMessage {
-	return append([]compat.ForkMessage(nil), f.forkMessages...)
+func (f *fakeTarget) ForkMessages() []orchestrator.ForkMessage {
+	return append([]orchestrator.ForkMessage(nil), f.forkMessages...)
 }
 
 func (f *fakeTarget) NotifySessionShutdown(_ context.Context, reason string) error {
@@ -1619,7 +1620,7 @@ func (f *fakeTarget) SetModel(context.Context, ai.Model) error {
 	return nil
 }
 
-func (f *fakeTarget) CycleModel(context.Context) (compat.ModelCycleResult, bool, error) {
+func (f *fakeTarget) CycleModel(context.Context) (orchestrator.ModelCycleResult, bool, error) {
 	f.cycleModelCalls++
 	return f.cycleModelResult, f.cycleModelOK, nil
 }
@@ -1634,17 +1635,17 @@ func (f *fakeTarget) CycleThinkingLevel(context.Context) (agentloop.ThinkingLeve
 	return f.cycleThinkingLevel, f.cycleThinkingOK, nil
 }
 
-func (f *fakeTarget) Compact(context.Context, compat.CompactOptions) (compat.CompactResult, error) {
+func (f *fakeTarget) Compact(context.Context, orchestrator.CompactOptions) (orchestrator.CompactResult, error) {
 	f.compactCalls++
-	return compat.CompactResult{}, nil
+	return orchestrator.CompactResult{}, nil
 }
 
-func (f *fakeTarget) SetSteeringMode(mode compat.QueueMode) {
+func (f *fakeTarget) SetSteeringMode(mode orchestrator.QueueMode) {
 	f.setSteeringModeCalls++
 	f.steeringMode = mode
 }
 
-func (f *fakeTarget) SetFollowUpMode(mode compat.QueueMode) {
+func (f *fakeTarget) SetFollowUpMode(mode orchestrator.QueueMode) {
 	f.setFollowUpModeCalls++
 	f.followUpMode = mode
 }
@@ -1669,8 +1670,8 @@ func (f *fakeTarget) LastAssistantText() (string, bool) {
 	return f.lastAssistantText, f.lastAssistantOK
 }
 
-func (f *fakeTarget) SlashCommands() []compat.SlashCommand {
-	return append([]compat.SlashCommand(nil), f.slashCommands...)
+func (f *fakeTarget) SlashCommands() []orchestrator.SlashCommand {
+	return append([]orchestrator.SlashCommand(nil), f.slashCommands...)
 }
 
 func (f *fakeTarget) WaitForIdle(context.Context) error {
@@ -1678,8 +1679,8 @@ func (f *fakeTarget) WaitForIdle(context.Context) error {
 	return nil
 }
 
-func (f *fakeTarget) Snapshot() compat.Snapshot { return f.snapshot }
-func (f *fakeTarget) SessionStats() compat.SessionStats {
+func (f *fakeTarget) Snapshot() orchestrator.Snapshot { return f.snapshot }
+func (f *fakeTarget) SessionStats() orchestrator.SessionStats {
 	return f.sessionStats
 }
 func (f *fakeTarget) Messages() []ai.Message { return nil }

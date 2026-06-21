@@ -155,53 +155,53 @@ type BeforeProviderPayloadResult struct {
 
 // ToolCallEvent is emitted before a tool is executed.
 type ToolCallEvent struct {
-	Type       string `json:"type"`
-	ToolCallId string `json:"toolCallId"`
-	ToolName   string `json:"toolName"`
-	Input      any    `json:"input"`
+	Type       string
+	ToolCallId string
+	ToolName   string
+	Input      any
 }
 
 // ToolCallResult allows hook to block tool execution or patch its input.
 type ToolCallResult struct {
-	Block  bool           `json:"block,omitempty"`
-	Reason string         `json:"reason,omitempty"`
-	Input  map[string]any `json:"input,omitempty"`
+	Block  bool
+	Reason string
+	Input  map[string]any
 }
 
 // InputEvent is emitted before a prompt input is normalized into a user
 // message.
 type InputEvent struct {
-	Type   string         `json:"type"`
-	Text   string         `json:"text"`
-	Images []ImageContent `json:"images,omitempty"`
-	Source string         `json:"source,omitempty"`
+	Type   string
+	Text   string
+	Images []ImageContent
+	Source string
 }
 
 // InputResult allows an input handler to handle the prompt without an agent
 // turn or transform the prompt text/images before the user message is built.
 type InputResult struct {
-	Action string         `json:"action,omitempty"`
-	Text   string         `json:"text,omitempty"`
-	Images []ImageContent `json:"images,omitempty"`
+	Action string
+	Text   string
+	Images []ImageContent
 }
 
 // ToolResultEvent is emitted after a tool has been executed.
 type ToolResultEvent struct {
-	Type       string            `json:"type"`
-	ToolCallId string            `json:"toolCallId"`
-	ToolName   string            `json:"toolName"`
-	Input      any               `json:"input,omitempty"`
-	Content    []ai.ContentBlock `json:"content,omitempty"`
-	Details    any               `json:"details,omitempty"`
-	IsError    bool              `json:"isError,omitempty"`
+	Type       string
+	ToolCallId string
+	ToolName   string
+	Input      any
+	Content    []ai.ContentBlock
+	Details    any
+	IsError    bool
 }
 
 // ToolResultPatch allows hook to modify tool result or terminate the session.
 type ToolResultPatch struct {
-	Content   []ai.ContentBlock `json:"content,omitempty"`
-	Details   any               `json:"details,omitempty"`
-	IsError   *bool             `json:"isError,omitempty"`
-	Terminate *bool             `json:"terminate,omitempty"`
+	Content   []ai.ContentBlock
+	Details   any
+	IsError   *bool
+	Terminate *bool
 }
 
 // CompactionSettings records the settings used to prepare a compaction.

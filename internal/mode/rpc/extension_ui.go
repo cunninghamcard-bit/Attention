@@ -15,7 +15,7 @@ type rpcUIContext struct {
 }
 
 // rpcUIContext mirrors pi's extension UI RPC bridge for along's serializable
-// compat.UIContext surface:
+// extension.UIContext surface:
 // .agents/references/pi/packages/coding-agent/src/modes/rpc/rpc-types.ts:213-258.
 // Requests use fresh ids and wait for extension_ui_response like pi's
 // createDialogPromise/createExtensionUIContext:

@@ -10,9 +10,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/cunninghamcard-bit/Attention/internal/orchestrator"
 	"github.com/cunninghamcard-bit/Attention/internal/ai"
 	"github.com/cunninghamcard-bit/Attention/internal/config"
-	"github.com/cunninghamcard-bit/Attention/internal/mode/compat"
 )
 
 func TestBuildProviderResolvesCustomModelFromModelsJSON(t *testing.T) {
@@ -120,11 +120,11 @@ func TestRunPromptModeJSONSelectsRPCPath(t *testing.T) {
 	}()
 
 	var called string
-	runPrintMode = func(context.Context, printPromptRunner, []string) error {
+	runPrintMode = func(context.Context, *orchestrator.Orchestrator, []string) error {
 		called = "print"
 		return nil
 	}
-	runJSONMode = func(_ context.Context, _ jsonPromptRunner, prompts []string) error {
+	runJSONMode = func(_ context.Context, _ *orchestrator.Orchestrator, prompts []string) error {
 		called = "json"
 		if len(prompts) != 1 || prompts[0] != "prompt" {
 			t.Fatalf("prompts = %q, want [prompt]", prompts)
@@ -140,56 +140,19 @@ func TestRunPromptModeJSONSelectsRPCPath(t *testing.T) {
 	}
 }
 
-func TestRunPromptModeRPCSelectsBidirectionalRPCPath(t *testing.T) {
-	originalPrint := runPrintMode
-	originalJSON := runJSONMode
-	originalRPC := runRPCMode
-	defer func() {
-		runPrintMode = originalPrint
-		runJSONMode = originalJSON
-		runRPCMode = originalRPC
-	}()
-
-	var called string
-	runPrintMode = func(context.Context, printPromptRunner, []string) error {
-		called = "print"
-		return nil
-	}
-	runJSONMode = func(context.Context, jsonPromptRunner, []string) error {
-		called = "json"
-		return nil
-	}
-	runRPCMode = func(context.Context, compat.Target) error {
-		called = "rpc"
-		return nil
-	}
-
-	if err := runPromptMode(context.Background(), "rpc", nil, []string{"ignored"}); err != nil {
-		t.Fatalf("runPromptMode: %v", err)
-	}
-	if called != "rpc" {
-		t.Fatalf("called mode = %q, want rpc", called)
-	}
-}
-
 func TestRunPromptModeRejectsUnknownModeBeforeDispatch(t *testing.T) {
 	originalPrint := runPrintMode
 	originalJSON := runJSONMode
-	originalRPC := runRPCMode
 	defer func() {
 		runPrintMode = originalPrint
 		runJSONMode = originalJSON
-		runRPCMode = originalRPC
 	}()
 
 	wantErr := errors.New("should not be called")
-	runPrintMode = func(context.Context, printPromptRunner, []string) error {
+	runPrintMode = func(context.Context, *orchestrator.Orchestrator, []string) error {
 		return wantErr
 	}
-	runJSONMode = func(context.Context, jsonPromptRunner, []string) error {
-		return wantErr
-	}
-	runRPCMode = func(context.Context, compat.Target) error {
+	runJSONMode = func(context.Context, *orchestrator.Orchestrator, []string) error {
 		return wantErr
 	}
 

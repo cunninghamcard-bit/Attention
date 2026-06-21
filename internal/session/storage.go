@@ -33,14 +33,12 @@ type JsonlSessionStorage struct {
 }
 
 type sessionHeader struct {
-	Type          string     `json:"type"`
-	Version       int        `json:"version"`
-	ID            string     `json:"id"`
-	Timestamp     string     `json:"timestamp"`
-	CWD           string     `json:"cwd"`
-	ParentSession string     `json:"parentSession,omitempty"`
-	ParentRef     string     `json:"parentRef,omitempty"`
-	SpawnedBy     *SpawnedBy `json:"spawnedBy,omitempty"`
+	Type          string `json:"type"`
+	Version       int    `json:"version"`
+	ID            string `json:"id"`
+	Timestamp     string `json:"timestamp"`
+	CWD           string `json:"cwd"`
+	ParentSession string `json:"parentSession,omitempty"`
 }
 
 func CreateJSONL(path string, opts CreateOptions) (*JsonlSessionStorage, error) {
@@ -60,8 +58,6 @@ func CreateJSONL(path string, opts CreateOptions) (*JsonlSessionStorage, error) 
 		Timestamp:     timestamp,
 		CWD:           opts.CWD,
 		ParentSession: opts.ParentSessionPath,
-		ParentRef:     opts.ParentRef,
-		SpawnedBy:     opts.SpawnedBy,
 	}
 
 	// pi's newSession writes nothing; the header and any buffered entries
@@ -76,8 +72,6 @@ func CreateJSONL(path string, opts CreateOptions) (*JsonlSessionStorage, error) 
 			CreatedAt:         timestamp,
 			Path:              path,
 			ParentSessionPath: opts.ParentSessionPath,
-			ParentRef:         opts.ParentRef,
-			SpawnedBy:         cloneSpawnedBy(opts.SpawnedBy),
 		},
 		entries: []SessionEntry{},
 		byID:    map[EntryID]int{},
@@ -155,8 +149,6 @@ func OpenJSONL(path string) (*JsonlSessionStorage, error) {
 			CreatedAt:         header.Timestamp,
 			Path:              path,
 			ParentSessionPath: header.ParentSession,
-			ParentRef:         header.ParentRef,
-			SpawnedBy:         cloneSpawnedBy(header.SpawnedBy),
 		},
 		entries: entries,
 		byID:    byID,
@@ -342,8 +334,6 @@ func LoadJSONLMetadata(path string) (Metadata, error) {
 		Modified:          modified,
 		Path:              path,
 		ParentSessionPath: header.ParentSession,
-		ParentRef:         header.ParentRef,
-		SpawnedBy:         cloneSpawnedBy(header.SpawnedBy),
 	}, nil
 }
 
@@ -597,8 +587,6 @@ func parseHeaderLine(line []byte, filePath string) (sessionHeader, error) {
 		Timestamp     string          `json:"timestamp"`
 		CWD           string          `json:"cwd"`
 		ParentSession json.RawMessage `json:"parentSession"`
-		ParentRef     json.RawMessage `json:"parentRef"`
-		SpawnedBy     json.RawMessage `json:"spawnedBy"`
 	}
 	if err := json.Unmarshal(line, &parsed); err != nil {
 		return sessionHeader{}, invalidSession(filePath, "first line is not a valid session header", err)
@@ -637,23 +625,6 @@ func parseHeaderLine(line []byte, filePath string) (sessionHeader, error) {
 			return sessionHeader{}, invalidSession(filePath, "session header parentSession must be a string", err)
 		}
 		header.ParentSession = parentSession
-	}
-	if len(parsed.ParentRef) > 0 {
-		if string(parsed.ParentRef) == "null" {
-			return sessionHeader{}, invalidSession(filePath, "session header parentRef must be a string", nil)
-		}
-		var parentRef string
-		if err := json.Unmarshal(parsed.ParentRef, &parentRef); err != nil {
-			return sessionHeader{}, invalidSession(filePath, "session header parentRef must be a string", err)
-		}
-		header.ParentRef = parentRef
-	}
-	if len(parsed.SpawnedBy) > 0 && string(parsed.SpawnedBy) != "null" {
-		var spawnedBy SpawnedBy
-		if err := json.Unmarshal(parsed.SpawnedBy, &spawnedBy); err != nil {
-			return sessionHeader{}, invalidSession(filePath, "session header spawnedBy must be an object", err)
-		}
-		header.SpawnedBy = &spawnedBy
 	}
 	return header, nil
 }

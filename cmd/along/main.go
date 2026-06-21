@@ -12,49 +12,27 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/cunninghamcard-bit/Attention/internal/agentloop"
-	"github.com/cunninghamcard-bit/Attention/internal/ai"
-	"github.com/cunninghamcard-bit/Attention/internal/app"
-	"github.com/cunninghamcard-bit/Attention/internal/auth"
-	"github.com/cunninghamcard-bit/Attention/internal/config"
-	"github.com/cunninghamcard-bit/Attention/internal/mode/compat"
 	printmode "github.com/cunninghamcard-bit/Attention/internal/mode/print"
 	rpcmode "github.com/cunninghamcard-bit/Attention/internal/mode/rpc"
+	"github.com/cunninghamcard-bit/Attention/internal/orchestrator"
+	"github.com/cunninghamcard-bit/Attention/internal/ai"
+	"github.com/cunninghamcard-bit/Attention/internal/auth"
+	"github.com/cunninghamcard-bit/Attention/internal/config"
+	"github.com/cunninghamcard-bit/Attention/internal/execenv/local"
 	"github.com/cunninghamcard-bit/Attention/internal/obs"
 	"github.com/cunninghamcard-bit/Attention/internal/provider"
 	"github.com/cunninghamcard-bit/Attention/internal/resource"
 	"github.com/cunninghamcard-bit/Attention/internal/session"
+	"github.com/cunninghamcard-bit/Attention/internal/tool/builtin"
 )
 
-type printPromptRunner interface {
-	Prompt(context.Context, compat.PromptInput) (compat.PromptResult, error)
+type modeRunner func(context.Context, *orchestrator.Orchestrator, []string) error
+
+var runPrintMode modeRunner = func(ctx context.Context, orch *orchestrator.Orchestrator, prompts []string) error {
+	return printmode.Run(ctx, orch, prompts)
 }
 
-type jsonPromptRunner interface {
-	printPromptRunner
-	Subscribe(func(compat.Event)) func()
-	SessionMetadata() session.Metadata
-}
-
-type printModeRunner func(context.Context, printPromptRunner, []string) error
-type jsonModeRunner func(context.Context, jsonPromptRunner, []string) error
-type rpcModeRunner func(context.Context, compat.Target) error
-type cliModeRunner interface {
-	jsonPromptRunner
-	compat.Target
-}
-
-var runPrintMode printModeRunner = func(ctx context.Context, runner printPromptRunner, prompts []string) error {
-	return printmode.Run(ctx, runner, prompts)
-}
-
-var runJSONMode jsonModeRunner = func(ctx context.Context, runner jsonPromptRunner, prompts []string) error {
-	return rpcmode.Run(ctx, runner, prompts)
-}
-
-var runRPCMode rpcModeRunner = func(ctx context.Context, runner compat.Target) error {
-	return rpcmode.Serve(ctx, runner)
-}
+var runJSONMode modeRunner = rpcmode.Run
 
 func main() {
 	// SIGHUP included: bash children run with Setpgid and never receive the
@@ -62,15 +40,6 @@ func main() {
 	// detached children on shutdown signals (utils/shell.ts:167-185).
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	defer stop()
-
-	// `along serve` 是子命令（新协议头）；其余一律走旧 CLI 形态（userspace 不变）。
-	if len(os.Args) > 1 && os.Args[1] == "serve" {
-		if err := runServe(ctx, os.Args[2:]); err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
-		}
-		return
-	}
 
 	if err := run(ctx); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -121,10 +90,6 @@ func run(ctx context.Context) error {
 			prov.SetRuntimeAPIKey(m.Provider, *apiKey)
 		}
 	}
-	model, ok := prov.Resolve(*modelID)
-	if !ok {
-		return unknownModelError(*modelID, prov.All())
-	}
 	obs.Time("provider build")
 
 	// rpc is bidirectional: it reads commands from stdin, not a one-shot prompt.
@@ -149,34 +114,83 @@ func run(ctx context.Context) error {
 	}
 
 	settings := cfg.Settings
+	settingsManager, err := config.NewManager(cfg.AgentDir, cwd)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "load settings manager: %v\n", err)
+		settingsManager = nil
+	} else {
+		settings = settingsManager.Settings()
+	}
+
 	shellPath := settingsString(settings, "shellPath")
 	shellCommandPrefix := settingsString(settings, "shellCommandPrefix")
+	env := local.New(cwd, local.WithShell(shellPath))
 
-	comp, err := app.Compose(ctx, app.ComposeOptions{
-		DataDir:            cfg.AgentDir,
-		SessionsDir:        root,
-		CWD:                cwd,
-		Model:              model,
-		ThinkingLevel:      defaultThinkingLevel(settings),
-		Provider:           prov,
-		ShellPath:          shellPath,
-		ShellCommandPrefix: shellCommandPrefix,
+	promptPaths := settingsStringSlice(settings, "prompts")
+	skillPaths := settingsStringSlice(settings, "skills")
+	extensionPaths := settingsStringSlice(settings, "extensions")
+	resourceDiagnostics := []resource.ResourceDiagnostic{}
+	templates, templateDiagnostics, err := resource.LoadPromptTemplates(resource.LoadPromptTemplatesOptions{
+		CWD:             cwd,
+		AgentDir:        cfg.AgentDir,
+		Paths:           promptPaths,
+		IncludeDefaults: true,
+	})
+	resourceDiagnostics = append(resourceDiagnostics, templateDiagnostics...)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "load prompt templates: %v\n", err)
+		templates = nil
+	}
+	skills, skillDiagnostics, err := resource.LoadSkills(resource.LoadSkillsOptions{
+		CWD:             cwd,
+		AgentDir:        cfg.AgentDir,
+		Paths:           skillPaths,
+		IncludeDefaults: true,
+	})
+	resourceDiagnostics = append(resourceDiagnostics, skillDiagnostics...)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "load skills: %v\n", err)
+		skills = nil
+	}
+	projectContext, contextDiagnostics := resource.LoadContextFiles(cwd, cfg.AgentDir)
+	resourceDiagnostics = append(resourceDiagnostics, contextDiagnostics...)
+	logResourceDiagnostics(os.Stderr, resourceDiagnostics)
+	obs.Time("context/skills/templates load")
+
+	jsExtensions := discoverJSExtensions(cfg.AgentDir, cwd, extensionPaths, os.Stderr)
+
+	orch, err := orchestrator.New(ctx, orchestrator.NewOptions{
+		Repo:            session.NewJsonlSessionRepo(root),
+		CreateOptions:   session.JsonlSessionCreateOptions{CWD: cwd},
+		ModelID:         *modelID,
+		Provider:        prov,
+		Settings:        settings,
+		SettingsManager: settingsManager,
+		JSExtensions:    jsExtensions,
+		PromptTemplates: templates,
+		Skills:          skills,
+		PromptPaths:     promptPaths,
+		SkillPaths:      skillPaths,
+		AgentDir:        cfg.AgentDir,
+		ContextFiles:    projectContext,
+		Diagnostics:     resourceDiagnostics,
+		ExecutionEnv:    env,
+		Tools:           builtin.NewCodingTools(env, shellCommandPrefix),
 	})
 	if err != nil {
-		return fmt.Errorf("compose engine: %w", err)
+		return fmt.Errorf("create orchestrator: %w", err)
 	}
-	defer comp.Stop()
-
-	sess, err := comp.Repo.Create(ctx, session.JsonlSessionCreateOptions{CWD: cwd})
-	if err != nil {
-		return fmt.Errorf("create session: %w", err)
-	}
-	facade := comp.NewSessionFacade(sess.GetMetadata().ID)
-	obs.Time("engine compose")
+	obs.Time("orchestrator create")
 	obs.Report(os.Stderr)
 
-	if err := runPromptMode(ctx, *mode, facade, prompts); err != nil {
+	if err := runPromptMode(ctx, *mode, orch, prompts); err != nil {
+		if closeErr := orch.Close(); closeErr != nil {
+			return errors.Join(err, fmt.Errorf("close orchestrator: %w", closeErr))
+		}
 		return err
+	}
+	if err := orch.Close(); err != nil {
+		return fmt.Errorf("close orchestrator: %w", err)
 	}
 	if err := ctx.Err(); err != nil {
 		return err
@@ -256,26 +270,19 @@ func settingsStringSlice(settings config.Settings, key string) []string {
 func runPromptMode(
 	ctx context.Context,
 	mode string,
-	runner cliModeRunner,
+	orch *orchestrator.Orchestrator,
 	prompts []string,
 ) error {
 	switch mode {
 	case "print":
-		return runPrintMode(ctx, runner, prompts)
+		return runPrintMode(ctx, orch, prompts)
 	case "json":
-		return runJSONMode(ctx, runner, prompts)
+		return runJSONMode(ctx, orch, prompts)
 	case "rpc":
-		return runRPCMode(ctx, runner)
+		return rpcmode.Serve(ctx, orch)
 	default:
 		return validateMode(mode)
 	}
-}
-
-func defaultThinkingLevel(settings config.Settings) agentloop.ThinkingLevel {
-	if value, ok := settings["defaultThinkingLevel"].(string); ok && value != "" {
-		return agentloop.ThinkingLevel(value)
-	}
-	return agentloop.ThinkingMedium
 }
 
 func buildProvider(ctx context.Context, cfg config.Config) (*provider.Registry, error) {

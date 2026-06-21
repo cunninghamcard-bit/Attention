@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"sync"
 
 	"github.com/cunninghamcard-bit/Attention/internal/ai"
 	"github.com/cunninghamcard-bit/Attention/internal/message"
@@ -15,58 +14,12 @@ import (
 
 type JsonlSessionRepo struct {
 	sessionsRoot string
-
-	// open 是进程内打开会话注册表：延迟持久化（首条目才落盘）下，刚 Create
-	// 的会话磁盘上还不存在——repo 是会话的进程内权威，控制面/执行面/兼容头
-	// 都从这里拿同一个实例，不许各建私表。
-	mu   sync.Mutex
-	open map[string]*Session
 }
 
 var _ JsonlSessionRepoAPI = (*JsonlSessionRepo)(nil)
 
 func NewJsonlSessionRepo(sessionsRoot string) *JsonlSessionRepo {
-	return &JsonlSessionRepo{sessionsRoot: sessionsRoot, open: map[string]*Session{}}
-}
-
-func (r *JsonlSessionRepo) register(s *Session) *Session {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	id := s.GetMetadata().ID
-	if existing, ok := r.open[id]; ok {
-		return existing // 同会话同实例：一会话一锁的前提
-	}
-	r.open[id] = s
-	return s
-}
-
-// Get 按 ID 取会话：注册表命中即返回同一实例；否则从磁盘找到并打开（并登记）。
-func (r *JsonlSessionRepo) Get(ctx context.Context, id string) (*Session, bool, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, false, err
-	}
-	r.mu.Lock()
-	if s, ok := r.open[id]; ok {
-		r.mu.Unlock()
-		return s, true, nil
-	}
-	r.mu.Unlock()
-
-	all, err := r.List(ctx)
-	if err != nil {
-		return nil, false, err
-	}
-	for _, metadata := range all {
-		if metadata.ID != id {
-			continue
-		}
-		s, err := r.Open(ctx, metadata)
-		if err != nil {
-			return nil, false, err
-		}
-		return r.register(s), true, nil
-	}
-	return nil, false, nil
+	return &JsonlSessionRepo{sessionsRoot: sessionsRoot}
 }
 
 func (r *JsonlSessionRepo) Create(ctx context.Context, opts JsonlSessionCreateOptions) (*Session, error) {
@@ -94,17 +47,13 @@ func (r *JsonlSessionRepo) Create(ctx context.Context, opts JsonlSessionCreateOp
 		ID:                id,
 		CWD:               opts.CWD,
 		ParentSessionPath: opts.ParentSessionPath,
-		ParentRef:         opts.ParentRef,
-		SpawnedBy:         opts.SpawnedBy,
 	})
 	if err != nil {
 		return nil, err
 	}
-	return r.register(NewSession(storage)), nil
+	return NewSession(storage), nil
 }
 
-// Open 的合同是"从磁盘按元信息打开"（未落盘 = not found，pi 同义）。
-// 引擎内部按 ID 寻址（含未落盘会话）用 Get。
 func (r *JsonlSessionRepo) Open(ctx context.Context, metadata Metadata) (*Session, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -125,8 +74,6 @@ func (r *JsonlSessionRepo) Open(ctx context.Context, metadata Metadata) (*Sessio
 	return NewSession(storage), nil
 }
 
-// List 是"给人看的列表"：只含磁盘上的会话——延迟持久化下空会话不可见
-// （pi session-manager 同义）。引擎内部按 ID 寻址用 Get（注册表优先）。
 func (r *JsonlSessionRepo) List(ctx context.Context, listOpts ...JsonlSessionListOptions) ([]Metadata, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -200,9 +147,6 @@ func (r *JsonlSessionRepo) Delete(ctx context.Context, metadata Metadata) error 
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	r.mu.Lock()
-	delete(r.open, metadata.ID)
-	r.mu.Unlock()
 	if metadata.Path == "" {
 		return nil
 	}
@@ -233,16 +177,10 @@ func (r *JsonlSessionRepo) Fork(ctx context.Context, source Metadata, opts Jsonl
 	if parentSessionPath == "" {
 		parentSessionPath = source.Path
 	}
-	parentRef := opts.ParentRef
-	if parentRef == "" {
-		parentRef = source.ID
-	}
 	forked, err := r.Create(ctx, JsonlSessionCreateOptions{
 		ID:                opts.ID,
 		CWD:               opts.CWD,
 		ParentSessionPath: parentSessionPath,
-		ParentRef:         parentRef,
-		SpawnedBy:         opts.SpawnedBy,
 	})
 	if err != nil {
 		return nil, err

@@ -6,17 +6,17 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/cunninghamcard-bit/Attention/internal/orchestrator"
 	"github.com/cunninghamcard-bit/Attention/internal/ai"
-	"github.com/cunninghamcard-bit/Attention/internal/mode/compat"
 )
 
 func TestRunPrintsOnlyFinalAssistantText(t *testing.T) {
 	runner := &fakeRunner{}
-	runner.promptFunc = func(_ context.Context, input compat.PromptInput) (compat.PromptResult, error) {
+	runner.promptFunc = func(_ context.Context, input orchestrator.PromptInput) (orchestrator.PromptResult, error) {
 		if input.Text != "prompt" {
 			t.Fatalf("prompt input text = %q, want prompt", input.Text)
 		}
-		return compat.PromptResult{Message: assistantMessage("final answer")}, nil
+		return orchestrator.PromptResult{Message: assistantMessage("final answer")}, nil
 	}
 
 	var out bytes.Buffer
@@ -32,8 +32,8 @@ func TestRunPrintsOnlyFinalAssistantText(t *testing.T) {
 
 func TestRunMultipleTextBlocksEachGetNewline(t *testing.T) {
 	runner := &fakeRunner{}
-	runner.promptFunc = func(context.Context, compat.PromptInput) (compat.PromptResult, error) {
-		return compat.PromptResult{Message: ai.Message{
+	runner.promptFunc = func(context.Context, orchestrator.PromptInput) (orchestrator.PromptResult, error) {
+		return orchestrator.PromptResult{Message: ai.Message{
 			Role: ai.RoleAssistant,
 			Content: []ai.ContentBlock{
 				{Type: ai.ContentText, Text: "one"},
@@ -54,11 +54,11 @@ func TestRunMultipleTextBlocksEachGetNewline(t *testing.T) {
 
 func TestRunErrorStopReasonFailsWithoutStdout(t *testing.T) {
 	runner := &fakeRunner{}
-	runner.promptFunc = func(context.Context, compat.PromptInput) (compat.PromptResult, error) {
+	runner.promptFunc = func(context.Context, orchestrator.PromptInput) (orchestrator.PromptResult, error) {
 		msg := assistantMessage("partial text")
 		msg.StopReason = ai.StopReasonError
 		msg.ErrorMessage = "provider exploded"
-		return compat.PromptResult{Message: msg}, nil
+		return orchestrator.PromptResult{Message: msg}, nil
 	}
 
 	var out bytes.Buffer
@@ -75,10 +75,10 @@ func TestRunErrorStopReasonFailsWithoutStdout(t *testing.T) {
 
 func TestRunAbortedStopReasonUsesFallbackMessage(t *testing.T) {
 	runner := &fakeRunner{}
-	runner.promptFunc = func(context.Context, compat.PromptInput) (compat.PromptResult, error) {
+	runner.promptFunc = func(context.Context, orchestrator.PromptInput) (orchestrator.PromptResult, error) {
 		msg := assistantMessage("")
 		msg.StopReason = ai.StopReasonAborted
-		return compat.PromptResult{Message: msg}, nil
+		return orchestrator.PromptResult{Message: msg}, nil
 	}
 
 	var out bytes.Buffer
@@ -91,8 +91,8 @@ func TestRunAbortedStopReasonUsesFallbackMessage(t *testing.T) {
 func TestRunReturnsPromptError(t *testing.T) {
 	want := errors.New("prompt failed")
 	runner := &fakeRunner{}
-	runner.promptFunc = func(context.Context, compat.PromptInput) (compat.PromptResult, error) {
-		return compat.PromptResult{Message: assistantMessage("final")}, want
+	runner.promptFunc = func(context.Context, orchestrator.PromptInput) (orchestrator.PromptResult, error) {
+		return orchestrator.PromptResult{Message: assistantMessage("final")}, want
 	}
 
 	var out bytes.Buffer
@@ -107,8 +107,8 @@ func TestRunReturnsPromptError(t *testing.T) {
 
 func TestRunIgnoresNonAssistantResult(t *testing.T) {
 	runner := &fakeRunner{}
-	runner.promptFunc = func(context.Context, compat.PromptInput) (compat.PromptResult, error) {
-		return compat.PromptResult{Message: ai.Message{
+	runner.promptFunc = func(context.Context, orchestrator.PromptInput) (orchestrator.PromptResult, error) {
+		return orchestrator.PromptResult{Message: ai.Message{
 			Role:    ai.RoleUser,
 			Content: []ai.ContentBlock{{Type: ai.ContentText, Text: "user text"}},
 		}}, nil
@@ -124,13 +124,13 @@ func TestRunIgnoresNonAssistantResult(t *testing.T) {
 }
 
 type fakeRunner struct {
-	promptFunc func(context.Context, compat.PromptInput) (compat.PromptResult, error)
+	promptFunc func(context.Context, orchestrator.PromptInput) (orchestrator.PromptResult, error)
 }
 
 func (f *fakeRunner) Prompt(
 	ctx context.Context,
-	input compat.PromptInput,
-) (compat.PromptResult, error) {
+	input orchestrator.PromptInput,
+) (orchestrator.PromptResult, error) {
 	return f.promptFunc(ctx, input)
 }
 

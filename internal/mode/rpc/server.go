@@ -11,25 +11,56 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/cunninghamcard-bit/Attention/internal/extension"
+	"github.com/cunninghamcard-bit/Attention/internal/orchestrator"
 	"github.com/cunninghamcard-bit/Attention/internal/agentloop"
 	"github.com/cunninghamcard-bit/Attention/internal/ai"
-	"github.com/cunninghamcard-bit/Attention/internal/mode/compat"
 	"github.com/cunninghamcard-bit/Attention/internal/resource"
 )
 
-type commandTarget = compat.Target
+// commandTarget is the orchestrator surface the bidirectional rpc server drives.
+type commandTarget interface {
+	Subscribe(func(orchestrator.Event)) func()
+	Prompt(context.Context, orchestrator.PromptInput) (orchestrator.PromptResult, error)
+	Steer(context.Context, orchestrator.UserInput) error
+	FollowUp(context.Context, orchestrator.UserInput) error
+	Abort(context.Context) (orchestrator.AbortResult, error)
+	SetModel(context.Context, ai.Model) error
+	CycleModel(context.Context) (orchestrator.ModelCycleResult, bool, error)
+	SetThinkingLevel(context.Context, agentloop.ThinkingLevel) error
+	CycleThinkingLevel(context.Context) (agentloop.ThinkingLevel, bool, error)
+	Compact(context.Context, orchestrator.CompactOptions) (orchestrator.CompactResult, error)
+	SetSteeringMode(orchestrator.QueueMode)
+	SetFollowUpMode(orchestrator.QueueMode)
+	SetAutoCompaction(bool)
+	SetAutoRetry(bool)
+	AbortRetry()
+	ExecuteBash(context.Context, string) (orchestrator.BashResult, error)
+	AbortBash()
+	ExportHTML(context.Context, string) (string, error)
+	NewSession(context.Context, string) (bool, error)
+	SwitchSession(context.Context, string) (bool, error)
+	Fork(context.Context, string) (string, bool, error)
+	Clone(context.Context) (bool, error)
+	ForkMessages() []orchestrator.ForkMessage
+	NotifySessionShutdown(context.Context, string) error
+	SetSessionName(context.Context, string) error
+	LastAssistantText() (string, bool)
+	SlashCommands() []orchestrator.SlashCommand
+	WaitForIdle(context.Context) error
+	Snapshot() orchestrator.Snapshot
+	SessionStats() orchestrator.SessionStats
+	Messages() []ai.Message
+	ResolveModel(ctx context.Context, provider, modelID string) (ai.Model, bool)
+	AvailableModels(context.Context) []ai.Model
+	SetUIContext(extension.UIContext)
+}
 
 // Serve runs the bidirectional rpc protocol (pi modes/rpc/rpc-mode.ts):
 // JSON-line commands on stdin, JSON-line responses and events on stdout. It is
 // the backend a GUI (rpc-client) speaks to.
-func Serve(ctx context.Context, target compat.Target) error {
-	return serve(ctx, target, os.Stdin, os.Stdout)
-}
-
-// ServeIO 与 Serve 同义但显式给定输入输出——进程内 e2e（compose 全链路
-// oracle）从管道驱动 pi wire 协议用。
-func ServeIO(ctx context.Context, target compat.Target, stdin io.Reader, stdout io.Writer) error {
-	return serve(ctx, target, stdin, stdout)
+func Serve(ctx context.Context, orch *orchestrator.Orchestrator) error {
+	return serve(ctx, orch, os.Stdin, os.Stdout)
 }
 
 func serve(ctx context.Context, target commandTarget, stdin io.Reader, stdout io.Writer) (err error) {
@@ -53,7 +84,7 @@ func serve(ctx context.Context, target commandTarget, stdin io.Reader, stdout io
 
 	// pi's bidirectional rpc mode emits NO header line — the first output is a
 	// response or event (rpc-mode.ts:377+); only json print mode has a header.
-	cancel = target.Subscribe(func(ev compat.Event) {
+	cancel = target.Subscribe(func(ev orchestrator.Event) {
 		if value, ok := eventJSONFromOrchestrator(ev); ok {
 			s.write(value)
 		}
@@ -321,7 +352,7 @@ var handlers = map[string]func(*server, context.Context, command) *response{
 func (s *server) handlePrompt(ctx context.Context, cmd command) *response {
 	s.wg.Go(func() {
 		preflightSucceeded := false
-		input := compat.PromptInput{
+		input := orchestrator.PromptInput{
 			Text:              cmd.Message,
 			Source:            "rpc",
 			StreamingBehavior: cmd.StreamingBehavior,
@@ -345,7 +376,7 @@ func (s *server) handlePrompt(ctx context.Context, cmd command) *response {
 }
 
 func (s *server) handleSteer(ctx context.Context, cmd command) *response {
-	input := compat.UserInput{Text: cmd.Message}
+	input := orchestrator.UserInput{Text: cmd.Message}
 	if len(cmd.Images) > 0 {
 		input.Text = ""
 		input.Content = commandContent(cmd.Message, cmd.Images)
@@ -357,7 +388,7 @@ func (s *server) handleSteer(ctx context.Context, cmd command) *response {
 }
 
 func (s *server) handleFollowUp(ctx context.Context, cmd command) *response {
-	input := compat.UserInput{Text: cmd.Message}
+	input := orchestrator.UserInput{Text: cmd.Message}
 	if len(cmd.Images) > 0 {
 		input.Text = ""
 		input.Content = commandContent(cmd.Message, cmd.Images)
@@ -500,7 +531,7 @@ func (s *server) handleCompact(ctx context.Context, cmd command) *response {
 	if err := s.target.WaitForIdle(ctx); err != nil {
 		return failure(cmd.ID, "compact", err.Error())
 	}
-	result, err := s.target.Compact(ctx, compat.CompactOptions{CustomInstructions: cmd.CustomInstructions})
+	result, err := s.target.Compact(ctx, orchestrator.CompactOptions{CustomInstructions: cmd.CustomInstructions})
 	if err != nil {
 		return failure(cmd.ID, "compact", err.Error())
 	}
@@ -664,10 +695,10 @@ func parseThinkingLevel(level string) (agentloop.ThinkingLevel, error) {
 	}
 }
 
-func parseQueueMode(mode string) (compat.QueueMode, error) {
-	switch compat.QueueMode(mode) {
-	case compat.QueueModeAll, compat.QueueModeOneAtATime:
-		return compat.QueueMode(mode), nil
+func parseQueueMode(mode string) (orchestrator.QueueMode, error) {
+	switch orchestrator.QueueMode(mode) {
+	case orchestrator.QueueModeAll, orchestrator.QueueModeOneAtATime:
+		return orchestrator.QueueMode(mode), nil
 	default:
 		return "", fmt.Errorf("invalid queue mode %q", mode)
 	}
@@ -720,7 +751,7 @@ type sessionStatsContextUsageJSON struct {
 	Percent       float64 `json:"percent"`
 }
 
-func sessionStatsJSONFromOrchestrator(stats compat.SessionStats) sessionStatsJSON {
+func sessionStatsJSONFromOrchestrator(stats orchestrator.SessionStats) sessionStatsJSON {
 	out := sessionStatsJSON{
 		SessionFile:       stats.SessionFile,
 		SessionID:         stats.SessionID,
@@ -805,7 +836,7 @@ type sourceInfoJSON struct {
 	BaseDir string `json:"baseDir,omitempty"`
 }
 
-func slashCommandJSONFromOrchestrator(command compat.SlashCommand) slashCommandJSON {
+func slashCommandJSONFromOrchestrator(command orchestrator.SlashCommand) slashCommandJSON {
 	return slashCommandJSON{
 		Name:        command.Name,
 		Description: command.Description,
@@ -830,7 +861,7 @@ type bashResultJSON struct {
 	FullOutputPath string `json:"fullOutputPath,omitempty"`
 }
 
-func bashResultJSONFromOrchestrator(result compat.BashResult) bashResultJSON {
+func bashResultJSONFromOrchestrator(result orchestrator.BashResult) bashResultJSON {
 	return bashResultJSON{
 		Output:         result.Output,
 		ExitCode:       result.ExitCode,

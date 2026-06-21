@@ -961,58 +961,6 @@ func TestJsonlSessionStorageDirectBehavior(t *testing.T) {
 	}
 }
 
-func TestJsonlSessionMetadataSessionTreeFields(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "session.jsonl")
-	storage, err := CreateJSONL(path, CreateOptions{
-		ID:                "child",
-		CWD:               dir,
-		ParentSessionPath: "/tmp/parent.jsonl",
-		ParentRef:         "parent",
-		SpawnedBy: &SpawnedBy{
-			SessionID:  "root",
-			RunID:      "run_1",
-			ToolCallID: "tool_1",
-		},
-	})
-	if err != nil {
-		t.Fatalf("CreateJSONL: %v", err)
-	}
-
-	if err := storage.AppendEntry(SessionEntry{
-		Type:      "message",
-		ID:        EntryID("assistant-1"),
-		ParentID:  nil,
-		Timestamp: "2026-01-01T00:00:00.000Z",
-		Message:   assistantMessage("anthropic", "claude", "one"),
-	}); err != nil {
-		t.Fatalf("AppendEntry message: %v", err)
-	}
-
-	metadata, err := LoadJSONLMetadata(path)
-	if err != nil {
-		t.Fatalf("LoadJSONLMetadata: %v", err)
-	}
-	if metadata.ParentRef != "parent" ||
-		metadata.SpawnedBy == nil ||
-		metadata.SpawnedBy.SessionID != "root" ||
-		metadata.SpawnedBy.RunID != "run_1" ||
-		metadata.SpawnedBy.ToolCallID != "tool_1" {
-		t.Fatalf("metadata = %+v, want session tree fields", metadata)
-	}
-
-	reopened, err := OpenJSONL(path)
-	if err != nil {
-		t.Fatalf("OpenJSONL: %v", err)
-	}
-	reopenedMetadata := reopened.GetMetadata()
-	if reopenedMetadata.ParentRef != "parent" ||
-		reopenedMetadata.SpawnedBy == nil ||
-		reopenedMetadata.SpawnedBy.ToolCallID != "tool_1" {
-		t.Fatalf("reopened metadata = %+v, want session tree fields", reopenedMetadata)
-	}
-}
-
 func TestJsonlSessionStorageCreateEntryIDUsesShortUUIDPrefix(t *testing.T) {
 	dir := t.TempDir()
 	storage, err := CreateJSONL(filepath.Join(dir, "session.jsonl"), CreateOptions{CWD: dir})
@@ -1152,29 +1100,18 @@ func TestJsonlSessionRepoLifecycleAndFork(t *testing.T) {
 	if forkMetadata.ParentSessionPath != sourceMetadata.Path {
 		t.Fatalf("parent path = %q, want %q", forkMetadata.ParentSessionPath, sourceMetadata.Path)
 	}
-	if forkMetadata.ParentRef != sourceMetadata.ID {
-		t.Fatalf("parent ref = %q, want %q", forkMetadata.ParentRef, sourceMetadata.ID)
-	}
 	if ids := entryIDs(forked.GetEntries()); strings.Join(ids, ",") != string(seed)+","+string(user1)+","+string(assistant1) {
 		t.Fatalf("fork ids = %v, want [%s %s %s]", ids, seed, user1, assistant1)
 	}
 
 	atFork, err := repo.Fork(ctx, sourceMetadata, JsonlSessionForkOptions{
-		ID:        "at-fork",
-		CWD:       "/tmp/target-at",
-		EntryID:   &assistant1,
-		Position:  ForkAt,
-		ParentRef: "explicit-parent",
-		SpawnedBy: &SpawnedBy{SessionID: "source", RunID: "run_1"},
+		ID:       "at-fork",
+		CWD:      "/tmp/target-at",
+		EntryID:  &assistant1,
+		Position: ForkAt,
 	})
 	if err != nil {
 		t.Fatalf("Fork at: %v", err)
-	}
-	atForkMetadata := atFork.GetMetadata()
-	if atForkMetadata.ParentRef != "explicit-parent" ||
-		atForkMetadata.SpawnedBy == nil ||
-		atForkMetadata.SpawnedBy.RunID != "run_1" {
-		t.Fatalf("at fork metadata = %+v, want explicit session tree fields", atForkMetadata)
 	}
 	if ids := entryIDs(atFork.GetEntries()); strings.Join(ids, ",") != string(seed)+","+string(user1)+","+string(assistant1) {
 		t.Fatalf("at fork ids = %v, want [%s %s]", ids, user1, assistant1)
