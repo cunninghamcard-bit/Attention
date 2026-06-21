@@ -13,10 +13,10 @@ import (
 	"os"
 	"strconv"
 
-	"github.com/cunninghamcard-bit/Attention/src/core/app"
-	"github.com/cunninghamcard-bit/Attention/src/core/config"
-	"github.com/cunninghamcard-bit/Attention/src/core/plugin"
-	"github.com/cunninghamcard-bit/Attention/src/core/server"
+	"github.com/cunninghamcard-bit/Attention/internal/app"
+	"github.com/cunninghamcard-bit/Attention/internal/config"
+	"github.com/cunninghamcard-bit/Attention/internal/plugin"
+	"github.com/cunninghamcard-bit/Attention/internal/server"
 )
 
 // runServe 起 REST+SSE 协议服务（along-api.md）：组装引擎 → 监听 →
@@ -29,7 +29,7 @@ func runServe(ctx context.Context, args []string) error {
 	dataDir := fs.String("data-dir", "", "engine data dir (default: agent config dir)")
 	modelID := fs.String("model", "claude-sonnet-4-5", "model ID")
 	apiKey := fs.String("api-key", "", "API key override for the selected model's provider")
-	bundledPlugins := fs.String("bundled-plugins", "", "bundled plugins dir (dev: src/plugins)")
+	bundledPlugins := fs.String("bundled-plugins", "", "bundled plugins dir (dev: plugins)")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
@@ -76,7 +76,7 @@ func runServe(ctx context.Context, args []string) error {
 	}
 
 	// 插件注册表：用户目录 <agentDir>/plugins（捆绑目录随发版形态后定，
-	// dev 下可用 --bundled-plugins 指仓内 src/plugins）。
+	// dev 下可用 --bundled-plugins 指仓内 plugins）。
 	plugins, err := plugin.NewRegistry(*bundledPlugins, cfg.AgentDir)
 	if err != nil {
 		return fmt.Errorf("plugin registry: %w", err)

@@ -10,9 +10,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cunninghamcard-bit/Attention/src/core/ai"
-	"github.com/cunninghamcard-bit/Attention/src/core/config"
-	"github.com/cunninghamcard-bit/Attention/src/core/mode/compat"
+	"github.com/cunninghamcard-bit/Attention/internal/ai"
+	"github.com/cunninghamcard-bit/Attention/internal/config"
+	"github.com/cunninghamcard-bit/Attention/internal/mode/compat"
 )
 
 func TestBuildProviderResolvesCustomModelFromModelsJSON(t *testing.T) {

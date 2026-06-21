@@ -8,9 +8,9 @@ with the server-form bindings (Postgres / Redis / object store) removed.
 ## What's in here
 
 - `cmd/along` — headless CLI entry (print / json / rpc modes).
-- `src/core/**` — the engine: agent loop, AI providers, sessions, tools,
+- `internal/**` — the engine: agent loop, AI providers, sessions, tools,
   pipeline, hooks, plugins, the local event store + control-plane HTTP (REST+SSE).
-- `src/plugins/**` — bundled example plugins (hello-world, session-list, todo).
+- `plugins/**` — bundled example plugins (hello-world, session-list, todo).
 
 Excluded on purpose (server form): `backend/pg`, `backend/redis`, `store/pg`,
 `envhost`. The local bindings (`backend/local`) are kept, so it runs fully

@@ -1,0 +1,1690 @@
+package rpc
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/cunninghamcard-bit/Attention/internal/agentloop"
+	"github.com/cunninghamcard-bit/Attention/internal/ai"
+	"github.com/cunninghamcard-bit/Attention/internal/mode/compat"
+	"github.com/cunninghamcard-bit/Attention/internal/resource"
+)
+
+func TestServeWritesResponsesWithoutHeader(t *testing.T) {
+	target := &fakeTarget{
+		snapshot: compat.Snapshot{
+			Model:         ai.Model{Provider: "anthropic", ID: "claude-sonnet-4-5"},
+			ThinkingLevel: agentloop.ThinkingMedium,
+			SessionID:     "sess-1",
+			SessionName:   "named-session",
+			MessageCount:  3,
+		},
+	}
+	stdin := strings.NewReader(`{"id":"a","type":"get_state"}` + "\n")
+
+	var out bytes.Buffer
+	if err := serve(context.Background(), target, stdin, &out); err != nil {
+		t.Fatalf("serve: %v", err)
+	}
+	if !target.canceled {
+		t.Fatal("subscription was not canceled")
+	}
+
+	lines := splitLines(t, out.String())
+	// pi's bidirectional rpc mode emits no header line — the first output is
+	// a response or event (rpc-mode.ts:377+).
+	if got := len(lines); got != 1 {
+		t.Fatalf("line count = %d, want 1: %q", got, out.String())
+	}
+
+	resp := lines[0]
+	if resp["type"] != "response" || resp["command"] != "get_state" || resp["success"] != true {
+		t.Fatalf("response = %v", resp)
+	}
+	if resp["id"] != "a" {
+		t.Fatalf("response id = %v, want a", resp["id"])
+	}
+	data := resp["data"].(map[string]any)
+	if data["sessionId"] != "sess-1" ||
+		data["sessionName"] != "named-session" ||
+		data["thinkingLevel"] != "medium" ||
+		data["messageCount"] != float64(3) {
+		t.Fatalf("state data = %v", data)
+	}
+	// pi RpcSessionState shape: full field set + full model object (camelCase id).
+	for _, key := range []string{"isStreaming", "isCompacting", "steeringMode", "followUpMode", "autoCompactionEnabled", "pendingMessageCount"} {
+		if _, ok := data[key]; !ok {
+			t.Fatalf("state missing field %q: %v", key, data)
+		}
+	}
+	model := data["model"].(map[string]any)
+	if model["provider"] != "anthropic" || model["id"] != "claude-sonnet-4-5" {
+		t.Fatalf("model = %v (want full pi Model with camelCase id)", model)
+	}
+}
+
+func TestServeEmitsSessionShutdownOnExit(t *testing.T) {
+	target := &fakeTarget{}
+	stdin := strings.NewReader("")
+
+	var out bytes.Buffer
+	if err := serve(context.Background(), target, stdin, &out); err != nil {
+		t.Fatalf("serve: %v", err)
+	}
+	if target.shutdownCalls != 1 {
+		t.Fatalf("shutdown calls = %d, want 1", target.shutdownCalls)
+	}
+	if target.shutdownReason != "quit" {
+		t.Fatalf("shutdown reason = %q, want quit", target.shutdownReason)
+	}
+}
+
+func TestServeGetSessionStatsResponseShape(t *testing.T) {
+	target := &fakeTarget{
+		sessionStats: compat.SessionStats{
+			SessionID:         "sess-1",
+			UserMessages:      2,
+			AssistantMessages: 3,
+			ToolCalls:         4,
+			ToolResults:       5,
+			TotalMessages:     6,
+			Tokens: compat.SessionStatsTokens{
+				Input:      7,
+				Output:     8,
+				CacheRead:  9,
+				CacheWrite: 10,
+				Total:      34,
+			},
+			Cost: 1.75,
+			ContextUsage: &compat.ContextUsage{
+				Tokens:        34,
+				ContextWindow: 200,
+				Percent:       17,
+			},
+		},
+	}
+	stdin := strings.NewReader(`{"id":"stats","type":"get_session_stats"}` + "\n")
+
+	var out bytes.Buffer
+	if err := serve(context.Background(), target, stdin, &out); err != nil {
+		t.Fatalf("serve: %v", err)
+	}
+
+	resp := splitLines(t, out.String())[0]
+	if resp["type"] != "response" || resp["command"] != "get_session_stats" || resp["success"] != true {
+		t.Fatalf("response = %v", resp)
+	}
+	data := resp["data"].(map[string]any)
+	for _, key := range []string{
+		"sessionId",
+		"userMessages",
+		"assistantMessages",
+		"toolCalls",
+		"toolResults",
+		"totalMessages",
+		"tokens",
+		"cost",
+		"contextUsage",
+	} {
+		if _, ok := data[key]; !ok {
+			t.Fatalf("session stats missing %q: %v", key, data)
+		}
+	}
+	if _, ok := data["sessionFile"]; ok {
+		t.Fatalf("sessionFile present for empty path: %v", data)
+	}
+	if data["sessionId"] != "sess-1" || data["cost"] != 1.75 {
+		t.Fatalf("session stats data = %v", data)
+	}
+	tokens := data["tokens"].(map[string]any)
+	if tokens["input"] != float64(7) ||
+		tokens["output"] != float64(8) ||
+		tokens["cacheRead"] != float64(9) ||
+		tokens["cacheWrite"] != float64(10) ||
+		tokens["total"] != float64(34) {
+		t.Fatalf("tokens = %v", tokens)
+	}
+	contextUsage := data["contextUsage"].(map[string]any)
+	if contextUsage["tokens"] != float64(34) ||
+		contextUsage["contextWindow"] != float64(200) ||
+		contextUsage["percent"] != float64(17) {
+		t.Fatalf("contextUsage = %v", contextUsage)
+	}
+}
+
+func TestServeGetSessionStatsOmitsNilContextUsage(t *testing.T) {
+	target := &fakeTarget{
+		sessionStats: compat.SessionStats{
+			SessionID: "sess-1",
+		},
+	}
+	stdin := strings.NewReader(`{"id":"stats","type":"get_session_stats"}` + "\n")
+
+	var out bytes.Buffer
+	if err := serve(context.Background(), target, stdin, &out); err != nil {
+		t.Fatalf("serve: %v", err)
+	}
+
+	resp := splitLines(t, out.String())[0]
+	data := resp["data"].(map[string]any)
+	if _, ok := data["contextUsage"]; ok {
+		t.Fatalf("contextUsage present: %v", data)
+	}
+}
+
+func TestServeUnknownCommand(t *testing.T) {
+	target := &fakeTarget{}
+	stdin := strings.NewReader(`{"id":"x","type":"nope"}` + "\n")
+
+	var out bytes.Buffer
+	if err := serve(context.Background(), target, stdin, &out); err != nil {
+		t.Fatalf("serve: %v", err)
+	}
+	resp := splitLines(t, out.String())[0]
+	if resp["success"] != false || resp["command"] != "nope" {
+		t.Fatalf("response = %v", resp)
+	}
+	if !strings.Contains(resp["error"].(string), "Unknown command") {
+		t.Fatalf("error = %v", resp["error"])
+	}
+}
+
+func TestServeSetModelUnknownIsError(t *testing.T) {
+	target := &fakeTarget{} // resolve returns false
+	stdin := strings.NewReader(`{"type":"set_model","modelId":"ghost"}` + "\n")
+
+	var out bytes.Buffer
+	if err := serve(context.Background(), target, stdin, &out); err != nil {
+		t.Fatalf("serve: %v", err)
+	}
+	resp := splitLines(t, out.String())[0]
+	if resp["success"] != false {
+		t.Fatalf("expected failure: %v", resp)
+	}
+	if target.setModelCalls != 0 {
+		t.Fatalf("SetModel called %d times, want 0", target.setModelCalls)
+	}
+}
+
+func TestServePromptIsAsyncAndStreamsEvents(t *testing.T) {
+	target := &fakeTarget{}
+	target.promptFunc = func(_ context.Context, input compat.PromptInput) (compat.PromptResult, error) {
+		if input.Source != "rpc" {
+			t.Errorf("prompt source = %q, want rpc", input.Source)
+		}
+		if input.PreflightResult != nil {
+			input.PreflightResult(true) // emits the success response (pi preflight)
+		}
+		msg := assistantMessage("hi")
+		target.subscriber(compat.Event{Type: compat.EventMessageEnd, Message: &msg})
+		return compat.PromptResult{Message: msg}, nil
+	}
+	stdin := strings.NewReader(`{"id":"p","type":"prompt","message":"hello"}` + "\n")
+
+	var out bytes.Buffer
+	if err := serve(context.Background(), target, stdin, &out); err != nil {
+		t.Fatalf("serve: %v", err)
+	}
+	if target.promptCalls != 1 {
+		t.Fatalf("Prompt called %d times, want 1", target.promptCalls)
+	}
+
+	lines := splitLines(t, out.String())
+	// prompt response + message_end event (order is not guaranteed, prompt
+	// runs in the background; no header line, matching pi rpc)
+	if len(lines) != 2 {
+		t.Fatalf("line count = %d, want 2: %q", len(lines), out.String())
+	}
+	var sawResponse, sawEvent bool
+	for _, l := range lines {
+		switch l["type"] {
+		case "response":
+			if l["command"] == "prompt" && l["success"] == true {
+				sawResponse = true
+			}
+		case compat.EventMessageEnd:
+			sawEvent = true
+		}
+	}
+	if !sawResponse || !sawEvent {
+		t.Fatalf("sawResponse=%v sawEvent=%v: %q", sawResponse, sawEvent, out.String())
+	}
+}
+
+func TestServePromptImagesAndStreamingBehavior(t *testing.T) {
+	target := &fakeTarget{}
+	target.promptFunc = func(_ context.Context, input compat.PromptInput) (compat.PromptResult, error) {
+		if input.PreflightResult != nil {
+			input.PreflightResult(true)
+		}
+		return compat.PromptResult{}, nil
+	}
+	stdin := strings.NewReader(
+		`{"id":"p","type":"prompt","message":"hello","streamingBehavior":"followUp","images":[` +
+			`{"type":"image","data":"aGVsbG8=","mimeType":"image/png"}]}` + "\n",
+	)
+
+	var out bytes.Buffer
+	if err := serve(context.Background(), target, stdin, &out); err != nil {
+		t.Fatalf("serve: %v", err)
+	}
+	if target.promptCalls != 1 {
+		t.Fatalf("Prompt called %d times, want 1", target.promptCalls)
+	}
+	if len(target.promptInputs) != 1 {
+		t.Fatalf("prompt inputs len = %d, want 1", len(target.promptInputs))
+	}
+	input := target.promptInputs[0]
+	if input.StreamingBehavior != "followUp" {
+		t.Fatalf("streamingBehavior = %q, want followUp", input.StreamingBehavior)
+	}
+	assertTextImageContent(t, input.Content, "hello", "aGVsbG8=", "image/png")
+}
+
+func TestServeSteerAndFollowUpImages(t *testing.T) {
+	target := &fakeTarget{}
+	stdin := strings.NewReader(
+		`{"id":"s","type":"steer","message":"redirect","images":[` +
+			`{"type":"image","data":"c3RlZXI=","mimeType":"image/jpeg"}]}` + "\n" +
+			`{"id":"f","type":"follow_up","message":"next","images":[` +
+			`{"type":"image","data":"Zm9sbG93","mimeType":"image/gif"}]}` + "\n",
+	)
+
+	var out bytes.Buffer
+	if err := serve(context.Background(), target, stdin, &out); err != nil {
+		t.Fatalf("serve: %v", err)
+	}
+	if target.steerCalls != 1 || len(target.steerInputs) != 1 {
+		t.Fatalf("steer calls/inputs = %d/%d, want 1/1", target.steerCalls, len(target.steerInputs))
+	}
+	if target.followUpCalls != 1 || len(target.followUpInputs) != 1 {
+		t.Fatalf(
+			"follow-up calls/inputs = %d/%d, want 1/1",
+			target.followUpCalls,
+			len(target.followUpInputs),
+		)
+	}
+	assertTextImageContent(t, target.steerInputs[0].Content, "redirect", "c3RlZXI=", "image/jpeg")
+	assertTextImageContent(t, target.followUpInputs[0].Content, "next", "Zm9sbG93", "image/gif")
+}
+
+func TestServeThinkingLevelValidation(t *testing.T) {
+	target := &fakeTarget{}
+	stdin := strings.NewReader(`{"type":"set_thinking_level","level":"bogus"}` + "\n")
+
+	var out bytes.Buffer
+	if err := serve(context.Background(), target, stdin, &out); err != nil {
+		t.Fatalf("serve: %v", err)
+	}
+	resp := splitLines(t, out.String())[0]
+	if resp["success"] != false {
+		t.Fatalf("expected failure for invalid level: %v", resp)
+	}
+	if target.thinkingCalls != 0 {
+		t.Fatalf("SetThinkingLevel called %d times, want 0", target.thinkingCalls)
+	}
+}
+
+func TestServeThinkingLevelAcceptsPiLevels(t *testing.T) {
+	// pi ThinkingLevel union includes minimal and xhigh (agent types.ts:284).
+	for _, level := range []string{"off", "minimal", "low", "medium", "high", "xhigh"} {
+		target := &fakeTarget{}
+		stdin := strings.NewReader(`{"type":"set_thinking_level","level":"` + level + `"}` + "\n")
+		var out bytes.Buffer
+		if err := serve(context.Background(), target, stdin, &out); err != nil {
+			t.Fatalf("serve(%s): %v", level, err)
+		}
+		resp := splitLines(t, out.String())[0]
+		if resp["success"] != true {
+			t.Fatalf("level %q rejected: %v", level, resp)
+		}
+		if target.thinkingCalls != 1 {
+			t.Fatalf("level %q: SetThinkingLevel called %d times", level, target.thinkingCalls)
+		}
+	}
+}
+
+func TestServeCycleModelResponseShape(t *testing.T) {
+	target := &fakeTarget{
+		cycleModelResult: compat.ModelCycleResult{
+			Model: ai.Model{
+				ID:       "model-a",
+				Name:     "Model A",
+				Provider: "provider-a",
+			},
+			ThinkingLevel: agentloop.ThinkingLow,
+		},
+		cycleModelOK: true,
+	}
+	stdin := strings.NewReader(`{"id":"m","type":"cycle_model"}` + "\n")
+
+	var out bytes.Buffer
+	if err := serve(context.Background(), target, stdin, &out); err != nil {
+		t.Fatalf("serve: %v", err)
+	}
+	resp := splitLines(t, out.String())[0]
+	if resp["success"] != true || resp["command"] != "cycle_model" {
+		t.Fatalf("cycle_model response = %v", resp)
+	}
+	data := resp["data"].(map[string]any)
+	if data["thinkingLevel"] != "low" || data["isScoped"] != false {
+		t.Fatalf("cycle_model data = %v", data)
+	}
+	model := data["model"].(map[string]any)
+	if model["id"] != "model-a" || model["provider"] != "provider-a" || model["name"] != "Model A" {
+		t.Fatalf("cycle_model model = %v", model)
+	}
+}
+
+func TestServeCycleModelNullIncludesDataNull(t *testing.T) {
+	target := &fakeTarget{}
+	stdin := strings.NewReader(`{"id":"m","type":"cycle_model"}` + "\n")
+
+	var out bytes.Buffer
+	if err := serve(context.Background(), target, stdin, &out); err != nil {
+		t.Fatalf("serve: %v", err)
+	}
+	resp := splitLines(t, out.String())[0]
+	if resp["success"] != true || resp["command"] != "cycle_model" {
+		t.Fatalf("cycle_model response = %v", resp)
+	}
+	if _, ok := resp["data"]; !ok {
+		t.Fatalf("cycle_model null response missing data key: %v", resp)
+	}
+	if resp["data"] != nil {
+		t.Fatalf("cycle_model data = %v, want nil", resp["data"])
+	}
+}
+
+func TestServeCycleThinkingLevelResponseShape(t *testing.T) {
+	target := &fakeTarget{
+		cycleThinkingLevel: agentloop.ThinkingHigh,
+		cycleThinkingOK:    true,
+	}
+	stdin := strings.NewReader(`{"id":"t","type":"cycle_thinking_level"}` + "\n")
+
+	var out bytes.Buffer
+	if err := serve(context.Background(), target, stdin, &out); err != nil {
+		t.Fatalf("serve: %v", err)
+	}
+	resp := splitLines(t, out.String())[0]
+	if resp["success"] != true || resp["command"] != "cycle_thinking_level" {
+		t.Fatalf("cycle_thinking_level response = %v", resp)
+	}
+	data := resp["data"].(map[string]any)
+	if data["level"] != "high" {
+		t.Fatalf("cycle_thinking_level data = %v, want level high", data)
+	}
+}
+
+func TestServeCycleThinkingLevelNullIncludesDataNull(t *testing.T) {
+	target := &fakeTarget{}
+	stdin := strings.NewReader(`{"id":"t","type":"cycle_thinking_level"}` + "\n")
+
+	var out bytes.Buffer
+	if err := serve(context.Background(), target, stdin, &out); err != nil {
+		t.Fatalf("serve: %v", err)
+	}
+	resp := splitLines(t, out.String())[0]
+	if resp["success"] != true || resp["command"] != "cycle_thinking_level" {
+		t.Fatalf("cycle_thinking_level response = %v", resp)
+	}
+	if _, ok := resp["data"]; !ok {
+		t.Fatalf("cycle_thinking_level null response missing data key: %v", resp)
+	}
+	if resp["data"] != nil {
+		t.Fatalf("cycle_thinking_level data = %v, want nil", resp["data"])
+	}
+}
+
+func TestServeSetSessionNameEmptyFails(t *testing.T) {
+	target := &fakeTarget{}
+	stdin := strings.NewReader(`{"id":"n","type":"set_session_name","name":"   "}` + "\n")
+
+	var out bytes.Buffer
+	if err := serve(context.Background(), target, stdin, &out); err != nil {
+		t.Fatalf("serve: %v", err)
+	}
+	resp := splitLines(t, out.String())[0]
+	if resp["success"] != false || resp["command"] != "set_session_name" {
+		t.Fatalf("set_session_name response = %v", resp)
+	}
+	if resp["error"] != "Session name cannot be empty" {
+		t.Fatalf("set_session_name error = %v", resp["error"])
+	}
+	if target.setSessionNameCalls != 0 {
+		t.Fatalf("SetSessionName called %d times, want 0", target.setSessionNameCalls)
+	}
+}
+
+func TestServeSetSessionNameSuccessOmitsData(t *testing.T) {
+	target := &fakeTarget{}
+	stdin := strings.NewReader(`{"id":"n","type":"set_session_name","name":"  named  "}` + "\n")
+
+	var out bytes.Buffer
+	if err := serve(context.Background(), target, stdin, &out); err != nil {
+		t.Fatalf("serve: %v", err)
+	}
+	resp := splitLines(t, out.String())[0]
+	if resp["success"] != true || resp["command"] != "set_session_name" {
+		t.Fatalf("set_session_name response = %v", resp)
+	}
+	if _, ok := resp["data"]; ok {
+		t.Fatalf("set_session_name success included data: %v", resp)
+	}
+	if target.sessionName != "named" {
+		t.Fatalf("SetSessionName name = %q, want named", target.sessionName)
+	}
+}
+
+func TestServeGetLastAssistantTextResponseShape(t *testing.T) {
+	target := &fakeTarget{lastAssistantText: "hello", lastAssistantOK: true}
+	stdin := strings.NewReader(`{"id":"a","type":"get_last_assistant_text"}` + "\n")
+
+	var out bytes.Buffer
+	if err := serve(context.Background(), target, stdin, &out); err != nil {
+		t.Fatalf("serve: %v", err)
+	}
+	resp := splitLines(t, out.String())[0]
+	if resp["success"] != true || resp["command"] != "get_last_assistant_text" {
+		t.Fatalf("get_last_assistant_text response = %v", resp)
+	}
+	data := resp["data"].(map[string]any)
+	if data["text"] != "hello" {
+		t.Fatalf("get_last_assistant_text data = %v, want text hello", data)
+	}
+}
+
+func TestServeGetLastAssistantTextNull(t *testing.T) {
+	target := &fakeTarget{}
+	stdin := strings.NewReader(`{"id":"a","type":"get_last_assistant_text"}` + "\n")
+
+	var out bytes.Buffer
+	if err := serve(context.Background(), target, stdin, &out); err != nil {
+		t.Fatalf("serve: %v", err)
+	}
+	resp := splitLines(t, out.String())[0]
+	data := resp["data"].(map[string]any)
+	if _, ok := data["text"]; !ok {
+		t.Fatalf("get_last_assistant_text missing text key: %v", data)
+	}
+	if data["text"] != nil {
+		t.Fatalf("get_last_assistant_text text = %v, want nil", data["text"])
+	}
+}
+
+func TestServeSessionReplacementResponseShapes(t *testing.T) {
+	tests := []struct {
+		name          string
+		stdin         string
+		command       string
+		assertTarget  func(*testing.T, *fakeTarget)
+		configure     func(*fakeTarget)
+		wantCancelled bool
+	}{
+		{
+			name:          "new session",
+			stdin:         `{"id":"n","type":"new_session","parentSession":"/old.jsonl"}` + "\n",
+			command:       "new_session",
+			wantCancelled: true,
+			configure: func(target *fakeTarget) {
+				target.newSessionCancelled = true
+			},
+			assertTarget: func(t *testing.T, target *fakeTarget) {
+				t.Helper()
+				if target.newSessionCalls != 1 || target.parentSession != "/old.jsonl" {
+					t.Fatalf(
+						"NewSession calls/parent = %d/%q, want 1 /old.jsonl",
+						target.newSessionCalls,
+						target.parentSession,
+					)
+				}
+			},
+		},
+		{
+			name:          "switch session",
+			stdin:         `{"id":"s","type":"switch_session","sessionPath":"/next.jsonl"}` + "\n",
+			command:       "switch_session",
+			wantCancelled: false,
+			assertTarget: func(t *testing.T, target *fakeTarget) {
+				t.Helper()
+				if target.switchSessionCalls != 1 || target.sessionPath != "/next.jsonl" {
+					t.Fatalf(
+						"SwitchSession calls/path = %d/%q, want 1 /next.jsonl",
+						target.switchSessionCalls,
+						target.sessionPath,
+					)
+				}
+			},
+		},
+		{
+			name:          "clone",
+			stdin:         `{"id":"c","type":"clone"}` + "\n",
+			command:       "clone",
+			wantCancelled: true,
+			configure: func(target *fakeTarget) {
+				target.cloneCancelled = true
+			},
+			assertTarget: func(t *testing.T, target *fakeTarget) {
+				t.Helper()
+				if target.cloneCalls != 1 {
+					t.Fatalf("Clone calls = %d, want 1", target.cloneCalls)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			target := &fakeTarget{}
+			if tt.configure != nil {
+				tt.configure(target)
+			}
+
+			var out bytes.Buffer
+			if err := serve(context.Background(), target, strings.NewReader(tt.stdin), &out); err != nil {
+				t.Fatalf("serve: %v", err)
+			}
+			resp := splitLines(t, out.String())[0]
+			if resp["success"] != true || resp["command"] != tt.command {
+				t.Fatalf("%s response = %v", tt.command, resp)
+			}
+			data := resp["data"].(map[string]any)
+			if data["cancelled"] != tt.wantCancelled {
+				t.Fatalf("%s data = %v, want cancelled %v", tt.command, data, tt.wantCancelled)
+			}
+			tt.assertTarget(t, target)
+		})
+	}
+}
+
+func TestServeForkResponseShape(t *testing.T) {
+	target := &fakeTarget{
+		forkText:      "selected user",
+		forkCancelled: true,
+	}
+	stdin := strings.NewReader(`{"id":"f","type":"fork","entryId":"entry-1"}` + "\n")
+
+	var out bytes.Buffer
+	if err := serve(context.Background(), target, stdin, &out); err != nil {
+		t.Fatalf("serve: %v", err)
+	}
+	resp := splitLines(t, out.String())[0]
+	if resp["success"] != true || resp["command"] != "fork" {
+		t.Fatalf("fork response = %v", resp)
+	}
+	data := resp["data"].(map[string]any)
+	if data["text"] != "selected user" || data["cancelled"] != true {
+		t.Fatalf("fork data = %v, want text/cancelled", data)
+	}
+	if target.forkCalls != 1 || target.forkEntryID != "entry-1" {
+		t.Fatalf("Fork calls/entry = %d/%q, want 1/entry-1", target.forkCalls, target.forkEntryID)
+	}
+}
+
+func TestServeGetForkMessagesResponseShape(t *testing.T) {
+	target := &fakeTarget{
+		forkMessages: []compat.ForkMessage{
+			{EntryID: "entry-1", Text: "first"},
+			{EntryID: "entry-2", Text: "second"},
+		},
+	}
+	stdin := strings.NewReader(`{"id":"fm","type":"get_fork_messages"}` + "\n")
+
+	var out bytes.Buffer
+	if err := serve(context.Background(), target, stdin, &out); err != nil {
+		t.Fatalf("serve: %v", err)
+	}
+	resp := splitLines(t, out.String())[0]
+	if resp["success"] != true || resp["command"] != "get_fork_messages" {
+		t.Fatalf("get_fork_messages response = %v", resp)
+	}
+	data := resp["data"].(map[string]any)
+	messages := data["messages"].([]any)
+	if len(messages) != 2 {
+		t.Fatalf("messages len = %d, want 2", len(messages))
+	}
+	first := messages[0].(map[string]any)
+	if first["entryId"] != "entry-1" || first["text"] != "first" {
+		t.Fatalf("first message = %v, want entry-1/first", first)
+	}
+}
+
+func TestServeGetCommandsResponseShape(t *testing.T) {
+	target := &fakeTarget{
+		slashCommands: []compat.SlashCommand{
+			{
+				Name:   "run",
+				Source: "extension",
+			},
+			{
+				Name:        "deploy",
+				Description: "Deploy app",
+				Source:      "prompt",
+				SourceInfo: resource.NewSourceInfo(
+					resource.SourceProject,
+					"/project/prompts/deploy.md",
+					"/project/prompts",
+				),
+			},
+		},
+	}
+	stdin := strings.NewReader(`{"id":"cmds","type":"get_commands"}` + "\n")
+
+	var out bytes.Buffer
+	if err := serve(context.Background(), target, stdin, &out); err != nil {
+		t.Fatalf("serve: %v", err)
+	}
+	resp := splitLines(t, out.String())[0]
+	if resp["success"] != true || resp["command"] != "get_commands" {
+		t.Fatalf("get_commands response = %v", resp)
+	}
+	data := resp["data"].(map[string]any)
+	commands := data["commands"].([]any)
+	if len(commands) != 2 {
+		t.Fatalf("commands len = %d, want 2: %v", len(commands), commands)
+	}
+
+	extensionCommand := commands[0].(map[string]any)
+	if extensionCommand["name"] != "run" || extensionCommand["source"] != "extension" {
+		t.Fatalf("extension command = %v", extensionCommand)
+	}
+	extensionSourceInfo := extensionCommand["sourceInfo"].(map[string]any)
+	if extensionSourceInfo["kind"] != "" || extensionSourceInfo["path"] != "" {
+		t.Fatalf("extension sourceInfo = %v, want zero along source info", extensionSourceInfo)
+	}
+
+	promptCommand := commands[1].(map[string]any)
+	if promptCommand["name"] != "deploy" ||
+		promptCommand["description"] != "Deploy app" ||
+		promptCommand["source"] != "prompt" {
+		t.Fatalf("prompt command = %v", promptCommand)
+	}
+	promptSourceInfo := promptCommand["sourceInfo"].(map[string]any)
+	if promptSourceInfo["kind"] != "project" ||
+		promptSourceInfo["path"] != "/project/prompts/deploy.md" ||
+		promptSourceInfo["baseDir"] != "/project/prompts" {
+		t.Fatalf("prompt sourceInfo = %v, want camelCase along source info", promptSourceInfo)
+	}
+}
+
+func TestServeCompactAbortsFirst(t *testing.T) {
+	// pi manual compact aborts the running agent before compacting.
+	target := &fakeTarget{}
+	stdin := strings.NewReader(`{"id":"c","type":"compact"}` + "\n")
+	var out bytes.Buffer
+	if err := serve(context.Background(), target, stdin, &out); err != nil {
+		t.Fatalf("serve: %v", err)
+	}
+	if target.abortCalls != 1 || target.waitIdleCalls != 1 || target.compactCalls != 1 {
+		t.Fatalf("abort=%d waitIdle=%d compact=%d, want 1/1/1",
+			target.abortCalls, target.waitIdleCalls, target.compactCalls)
+	}
+	resp := splitLines(t, out.String())[0]
+	if resp["success"] != true || resp["command"] != "compact" {
+		t.Fatalf("compact response = %v", resp)
+	}
+}
+
+func TestServeRetryAndCompactionToggleCommandsOmitData(t *testing.T) {
+	target := &fakeTarget{autoCompactionEnabled: true}
+	stdin := strings.NewReader(
+		`{"id":"c","type":"set_auto_compaction","enabled":false}` + "\n" +
+			`{"id":"r","type":"set_auto_retry","enabled":true}` + "\n" +
+			`{"id":"a","type":"abort_retry"}` + "\n",
+	)
+
+	var out bytes.Buffer
+	if err := serve(context.Background(), target, stdin, &out); err != nil {
+		t.Fatalf("serve: %v", err)
+	}
+
+	lines := splitLines(t, out.String())
+	if got := len(lines); got != 3 {
+		t.Fatalf("line count = %d, want 3: %q", got, out.String())
+	}
+	for _, resp := range lines {
+		if resp["success"] != true {
+			t.Fatalf("response = %v, want success", resp)
+		}
+		if _, ok := resp["data"]; ok {
+			t.Fatalf("response included data: %v", resp)
+		}
+	}
+	if target.setAutoCompactionCalls != 1 || target.autoCompactionEnabled {
+		t.Fatalf(
+			"SetAutoCompaction calls/enabled = %d/%v, want 1/false",
+			target.setAutoCompactionCalls,
+			target.autoCompactionEnabled,
+		)
+	}
+	if target.setAutoRetryCalls != 1 || !target.autoRetryEnabled {
+		t.Fatalf(
+			"SetAutoRetry calls/enabled = %d/%v, want 1/true",
+			target.setAutoRetryCalls,
+			target.autoRetryEnabled,
+		)
+	}
+	if target.abortRetryCalls != 1 {
+		t.Fatalf("AbortRetry calls = %d, want 1", target.abortRetryCalls)
+	}
+}
+
+func TestServeBashResponseShapeAndCommandField(t *testing.T) {
+	target := &fakeTarget{
+		bashResult: compat.BashResult{
+			Output:         "partial\n",
+			Cancelled:      true,
+			Truncated:      true,
+			FullOutputPath: "/tmp/full.log",
+		},
+	}
+	stdin := strings.NewReader(`{"id":"b","type":"bash","command":"sleep 10"}` + "\n")
+
+	var out bytes.Buffer
+	if err := serve(context.Background(), target, stdin, &out); err != nil {
+		t.Fatalf("serve: %v", err)
+	}
+	if target.executeBashCalls != 1 || target.bashCommand != "sleep 10" {
+		t.Fatalf(
+			"ExecuteBash calls/command = %d/%q, want 1/sleep 10",
+			target.executeBashCalls,
+			target.bashCommand,
+		)
+	}
+
+	resp := splitLines(t, out.String())[0]
+	if resp["success"] != true || resp["command"] != "bash" {
+		t.Fatalf("bash response = %v", resp)
+	}
+	data := resp["data"].(map[string]any)
+	if data["output"] != "partial\n" ||
+		data["exitCode"] != nil ||
+		data["cancelled"] != true ||
+		data["truncated"] != true ||
+		data["fullOutputPath"] != "/tmp/full.log" {
+		t.Fatalf("bash data = %v", data)
+	}
+}
+
+func TestServeExportHTMLReturnsPathAndParsesOutputPath(t *testing.T) {
+	target := &fakeTarget{exportHTMLPath: "/tmp/session.html"}
+	stdin := strings.NewReader(`{"id":"e","type":"export_html","outputPath":"exports/session.html"}` + "\n")
+
+	var out bytes.Buffer
+	if err := serve(context.Background(), target, stdin, &out); err != nil {
+		t.Fatalf("serve: %v", err)
+	}
+	if target.exportHTMLCalls != 1 || target.exportHTMLOutputPath != "exports/session.html" {
+		t.Fatalf(
+			"ExportHTML calls/outputPath = %d/%q, want 1/exports/session.html",
+			target.exportHTMLCalls,
+			target.exportHTMLOutputPath,
+		)
+	}
+
+	resp := splitLines(t, out.String())[0]
+	if resp["success"] != true || resp["command"] != "export_html" {
+		t.Fatalf("export_html response = %v", resp)
+	}
+	data := resp["data"].(map[string]any)
+	if data["path"] != "/tmp/session.html" {
+		t.Fatalf("export_html data = %v, want path", data)
+	}
+}
+
+func TestServeAbortBashReturnsSuccessNoData(t *testing.T) {
+	target := &fakeTarget{}
+	stdin := strings.NewReader(`{"id":"a","type":"abort_bash"}` + "\n")
+
+	var out bytes.Buffer
+	if err := serve(context.Background(), target, stdin, &out); err != nil {
+		t.Fatalf("serve: %v", err)
+	}
+	if target.abortBashCalls != 1 {
+		t.Fatalf("AbortBash calls = %d, want 1", target.abortBashCalls)
+	}
+	resp := splitLines(t, out.String())[0]
+	if resp["success"] != true || resp["command"] != "abort_bash" {
+		t.Fatalf("abort_bash response = %v", resp)
+	}
+	if _, ok := resp["data"]; ok {
+		t.Fatalf("abort_bash response included data: %v", resp)
+	}
+}
+
+func TestServeQueueModeCommandsOmitDataAndCallSetters(t *testing.T) {
+	target := &fakeTarget{}
+	stdin := strings.NewReader(
+		`{"id":"s","type":"set_steering_mode","mode":"all"}` + "\n" +
+			`{"id":"f","type":"set_follow_up_mode","mode":"one-at-a-time"}` + "\n",
+	)
+
+	var out bytes.Buffer
+	if err := serve(context.Background(), target, stdin, &out); err != nil {
+		t.Fatalf("serve: %v", err)
+	}
+
+	lines := splitLines(t, out.String())
+	if got := len(lines); got != 2 {
+		t.Fatalf("line count = %d, want 2: %q", got, out.String())
+	}
+	for _, resp := range lines {
+		if resp["success"] != true {
+			t.Fatalf("response = %v, want success", resp)
+		}
+		if _, ok := resp["data"]; ok {
+			t.Fatalf("response included data: %v", resp)
+		}
+	}
+	if target.setSteeringModeCalls != 1 || target.steeringMode != compat.QueueModeAll {
+		t.Fatalf(
+			"SetSteeringMode calls/mode = %d/%q, want 1/all",
+			target.setSteeringModeCalls,
+			target.steeringMode,
+		)
+	}
+	if target.setFollowUpModeCalls != 1 || target.followUpMode != compat.QueueModeOneAtATime {
+		t.Fatalf(
+			"SetFollowUpMode calls/mode = %d/%q, want 1/one-at-a-time",
+			target.setFollowUpModeCalls,
+			target.followUpMode,
+		)
+	}
+}
+
+func TestServeQueueModeInvalidFailsWithoutSetter(t *testing.T) {
+	tests := []struct {
+		name    string
+		command string
+	}{
+		{
+			name:    "steering",
+			command: `{"id":"s","type":"set_steering_mode","mode":"bogus"}`,
+		},
+		{
+			name:    "follow-up",
+			command: `{"id":"f","type":"set_follow_up_mode","mode":"bogus"}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			target := &fakeTarget{}
+			stdin := strings.NewReader(tt.command + "\n")
+
+			var out bytes.Buffer
+			if err := serve(context.Background(), target, stdin, &out); err != nil {
+				t.Fatalf("serve: %v", err)
+			}
+
+			resp := splitLines(t, out.String())[0]
+			if resp["success"] != false {
+				t.Fatalf("response = %v, want failure", resp)
+			}
+			if resp["error"] != `invalid queue mode "bogus"` {
+				t.Fatalf("error = %v, want invalid queue mode", resp["error"])
+			}
+			if target.setSteeringModeCalls != 0 || target.setFollowUpModeCalls != 0 {
+				t.Fatalf(
+					"setter calls = steering %d follow-up %d, want 0/0",
+					target.setSteeringModeCalls,
+					target.setFollowUpModeCalls,
+				)
+			}
+		})
+	}
+}
+
+func TestServeAbortWaitsForIdle(t *testing.T) {
+	target := &fakeTarget{}
+	stdin := strings.NewReader(`{"type":"abort"}` + "\n")
+	var out bytes.Buffer
+	if err := serve(context.Background(), target, stdin, &out); err != nil {
+		t.Fatalf("serve: %v", err)
+	}
+	if target.abortCalls != 1 || target.waitIdleCalls != 1 {
+		t.Fatalf("abort=%d waitIdle=%d, want 1/1", target.abortCalls, target.waitIdleCalls)
+	}
+}
+
+func TestRPCUIContextSelectEmitsRequestAndDispatchResponse(t *testing.T) {
+	ui, s, writer := newTestRPCUIContext()
+	done := make(chan intResult, 1)
+	go func() {
+		got, err := ui.Select("Pick one", []string{"one", "two"})
+		done <- intResult{value: got, err: err}
+	}()
+
+	req := writer.nextPayload(t)
+	if req["type"] != "extension_ui_request" ||
+		req["method"] != "select" ||
+		req["title"] != "Pick one" {
+		t.Fatalf("select request = %v", req)
+	}
+	options := req["options"].([]any)
+	if len(options) != 2 || options[0] != "one" || options[1] != "two" {
+		t.Fatalf("select options = %v", options)
+	}
+	id := req["id"].(string)
+
+	s.dispatch(
+		context.Background(),
+		fmt.Appendf(nil, `{"type":"extension_ui_response","id":%q,"value":"two"}`, id),
+	)
+
+	result := awaitIntResult(t, done)
+	if result.err != nil || result.value != 1 {
+		t.Fatalf("Select = %d, %v; want 1, nil", result.value, result.err)
+	}
+	writer.assertNoLine(t)
+}
+
+func TestRPCUIContextSelectErrorsForUnknownValueAndCancelled(t *testing.T) {
+	tests := []struct {
+		name string
+		resp uiResponse
+	}{
+		{
+			name: "unknown value",
+			resp: uiResponse{Value: new("missing")},
+		},
+		{
+			name: "cancelled",
+			resp: uiResponse{Cancelled: true},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ui, s, writer := newTestRPCUIContext()
+			done := make(chan intResult, 1)
+			go func() {
+				got, err := ui.Select("Pick", []string{"one"})
+				done <- intResult{value: got, err: err}
+			}()
+
+			req := writer.nextPayload(t)
+			tt.resp.ID = req["id"].(string)
+			s.deliverUIResponse(tt.resp)
+
+			result := awaitIntResult(t, done)
+			if result.value != -1 || result.err == nil {
+				t.Fatalf("Select = %d, %v; want -1, error", result.value, result.err)
+			}
+		})
+	}
+}
+
+func TestRPCUIContextConfirmReturnsConfirmedAndCancelled(t *testing.T) {
+	tests := []struct {
+		name      string
+		resp      uiResponse
+		wantValue bool
+	}{
+		{
+			name:      "confirmed",
+			resp:      uiResponse{Confirmed: new(true)},
+			wantValue: true,
+		},
+		{
+			name:      "cancelled",
+			resp:      uiResponse{Cancelled: true},
+			wantValue: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ui, s, writer := newTestRPCUIContext()
+			done := make(chan boolResult, 1)
+			go func() {
+				got, err := ui.Confirm("Continue?")
+				done <- boolResult{value: got, err: err}
+			}()
+
+			req := writer.nextPayload(t)
+			if req["type"] != "extension_ui_request" ||
+				req["method"] != "confirm" ||
+				req["title"] != "Continue?" {
+				t.Fatalf("confirm request = %v", req)
+			}
+			tt.resp.ID = req["id"].(string)
+			s.deliverUIResponse(tt.resp)
+
+			result := awaitBoolResult(t, done)
+			if result.err != nil || result.value != tt.wantValue {
+				t.Fatalf("Confirm = %v, %v; want %v, nil", result.value, result.err, tt.wantValue)
+			}
+		})
+	}
+}
+
+func TestRPCUIContextInputReturnsValueAndCancelled(t *testing.T) {
+	tests := []struct {
+		name      string
+		resp      uiResponse
+		wantValue string
+	}{
+		{
+			name:      "value",
+			resp:      uiResponse{Value: new("typed")},
+			wantValue: "typed",
+		},
+		{
+			name:      "cancelled",
+			resp:      uiResponse{Cancelled: true},
+			wantValue: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ui, s, writer := newTestRPCUIContext()
+			done := make(chan stringResult, 1)
+			go func() {
+				got, err := ui.Input("Name")
+				done <- stringResult{value: got, err: err}
+			}()
+
+			req := writer.nextPayload(t)
+			if req["type"] != "extension_ui_request" ||
+				req["method"] != "input" ||
+				req["title"] != "Name" {
+				t.Fatalf("input request = %v", req)
+			}
+			tt.resp.ID = req["id"].(string)
+			s.deliverUIResponse(tt.resp)
+
+			result := awaitStringResult(t, done)
+			if result.err != nil || result.value != tt.wantValue {
+				t.Fatalf("Input = %q, %v; want %q, nil", result.value, result.err, tt.wantValue)
+			}
+		})
+	}
+}
+
+func TestRPCUIContextEditorReturnsValueAndCancelled(t *testing.T) {
+	tests := []struct {
+		name      string
+		resp      uiResponse
+		wantValue string
+	}{
+		{
+			name:      "value",
+			resp:      uiResponse{Value: new("edited")},
+			wantValue: "edited",
+		},
+		{
+			name:      "cancelled",
+			resp:      uiResponse{Cancelled: true},
+			wantValue: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ui, s, writer := newTestRPCUIContext()
+			done := make(chan stringResult, 1)
+			go func() {
+				got, err := ui.Editor("Edit", "draft")
+				done <- stringResult{value: got, err: err}
+			}()
+
+			req := writer.nextPayload(t)
+			if req["type"] != "extension_ui_request" ||
+				req["method"] != "editor" ||
+				req["title"] != "Edit" ||
+				req["prefill"] != "draft" {
+				t.Fatalf("editor request = %v", req)
+			}
+			tt.resp.ID = req["id"].(string)
+			s.deliverUIResponse(tt.resp)
+
+			result := awaitStringResult(t, done)
+			if result.err != nil || result.value != tt.wantValue {
+				t.Fatalf("Editor = %q, %v; want %q, nil", result.value, result.err, tt.wantValue)
+			}
+		})
+	}
+}
+
+func TestRPCUIContextNotifyEmitsRequestWithoutPendingResponse(t *testing.T) {
+	ui, s, writer := newTestRPCUIContext()
+
+	ui.Notify("Saved")
+
+	req := writer.nextPayload(t)
+	if req["type"] != "extension_ui_request" ||
+		req["method"] != "notify" ||
+		req["message"] != "Saved" {
+		t.Fatalf("notify request = %v", req)
+	}
+	s.uiMu.Lock()
+	pending := len(s.pendingUI)
+	s.uiMu.Unlock()
+	if pending != 0 {
+		t.Fatalf("pending UI requests = %d, want 0", pending)
+	}
+}
+
+func TestRPCUIContextSerializableFireAndForgetRequests(t *testing.T) {
+	tests := []struct {
+		name  string
+		call  func(*rpcUIContext)
+		check func(*testing.T, map[string]any)
+	}{
+		{
+			name: "set status",
+			call: func(ui *rpcUIContext) {
+				ui.SetStatus("branch", "main")
+			},
+			check: func(t *testing.T, req map[string]any) {
+				t.Helper()
+				if req["method"] != "setStatus" ||
+					req["statusKey"] != "branch" ||
+					req["statusText"] != "main" {
+					t.Fatalf("setStatus request = %v", req)
+				}
+			},
+		},
+		{
+			name: "set widget",
+			call: func(ui *rpcUIContext) {
+				ui.SetWidget("diff", []string{"one", "two"})
+			},
+			check: func(t *testing.T, req map[string]any) {
+				t.Helper()
+				lines := req["widgetLines"].([]any)
+				if req["method"] != "setWidget" ||
+					req["widgetKey"] != "diff" ||
+					len(lines) != 2 ||
+					lines[0] != "one" ||
+					lines[1] != "two" {
+					t.Fatalf("setWidget request = %v", req)
+				}
+				if _, ok := req["widgetPlacement"]; ok {
+					t.Fatalf("widgetPlacement present without options: %v", req)
+				}
+			},
+		},
+		{
+			name: "set title",
+			call: func(ui *rpcUIContext) {
+				ui.SetTitle("Along")
+			},
+			check: func(t *testing.T, req map[string]any) {
+				t.Helper()
+				if req["method"] != "setTitle" || req["title"] != "Along" {
+					t.Fatalf("setTitle request = %v", req)
+				}
+			},
+		},
+		{
+			name: "set editor text",
+			call: func(ui *rpcUIContext) {
+				ui.SetEditorText("draft")
+			},
+			check: func(t *testing.T, req map[string]any) {
+				t.Helper()
+				if req["method"] != "set_editor_text" || req["text"] != "draft" {
+					t.Fatalf("set_editor_text request = %v", req)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ui, s, writer := newTestRPCUIContext()
+
+			tt.call(ui)
+
+			req := writer.nextPayload(t)
+			if req["type"] != "extension_ui_request" {
+				t.Fatalf("request type = %v, want extension_ui_request: %v", req["type"], req)
+			}
+			tt.check(t, req)
+			assertNoPendingUI(t, s)
+			writer.assertNoLine(t)
+		})
+	}
+}
+
+func TestRPCUIContextCloseUnblocksPendingRequest(t *testing.T) {
+	ui, s, writer := newTestRPCUIContext()
+	done := make(chan stringResult, 1)
+	go func() {
+		got, err := ui.Input("Name")
+		done <- stringResult{value: got, err: err}
+	}()
+
+	writer.nextPayload(t)
+	s.closeUIRequests()
+
+	result := awaitStringResult(t, done)
+	if result.value != "" || !errors.Is(result.err, errRPCUIClosed) {
+		t.Fatalf("Input after close = %q, %v; want empty, errRPCUIClosed", result.value, result.err)
+	}
+}
+
+func TestServeSetsAndClearsUIContext(t *testing.T) {
+	target := &fakeTarget{}
+	stdin := strings.NewReader("")
+	var out bytes.Buffer
+
+	if err := serve(context.Background(), target, stdin, &out); err != nil {
+		t.Fatalf("serve: %v", err)
+	}
+
+	if len(target.uiContexts) != 2 {
+		t.Fatalf("SetUIContext calls = %d, want 2", len(target.uiContexts))
+	}
+	if target.uiContexts[0] == nil {
+		t.Fatal("first UI context is nil")
+	}
+	if target.uiContexts[1] != nil {
+		t.Fatalf("second UI context = %T, want nil", target.uiContexts[1])
+	}
+}
+
+func splitLines(t *testing.T, out string) []map[string]any {
+	t.Helper()
+	raw := strings.Split(strings.TrimSuffix(out, "\n"), "\n")
+	lines := make([]map[string]any, 0, len(raw))
+	for _, line := range raw {
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(line), &payload); err != nil {
+			t.Fatalf("unmarshal %q: %v", line, err)
+		}
+		lines = append(lines, payload)
+	}
+	return lines
+}
+
+type lineCaptureWriter struct {
+	mu    sync.Mutex
+	buf   []byte
+	lines chan string
+}
+
+func newLineCaptureWriter() *lineCaptureWriter {
+	return &lineCaptureWriter{lines: make(chan string, 16)}
+}
+
+func (w *lineCaptureWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	w.buf = append(w.buf, p...)
+	for {
+		idx := bytes.IndexByte(w.buf, '\n')
+		if idx < 0 {
+			return len(p), nil
+		}
+		line := string(append([]byte(nil), w.buf[:idx]...))
+		w.buf = append([]byte(nil), w.buf[idx+1:]...)
+		w.lines <- line
+	}
+}
+
+func (w *lineCaptureWriter) nextPayload(t *testing.T) map[string]any {
+	t.Helper()
+
+	select {
+	case line := <-w.lines:
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(line), &payload); err != nil {
+			t.Fatalf("unmarshal %q: %v", line, err)
+		}
+		return payload
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for JSON line")
+		return nil
+	}
+}
+
+func (w *lineCaptureWriter) assertNoLine(t *testing.T) {
+	t.Helper()
+
+	select {
+	case line := <-w.lines:
+		t.Fatalf("unexpected JSON line: %s", line)
+	default:
+	}
+}
+
+func newTestRPCUIContext() (*rpcUIContext, *server, *lineCaptureWriter) {
+	writer := newLineCaptureWriter()
+	s := &server{
+		writer:    newJSONLineWriter(writer),
+		pendingUI: map[string]chan uiResponse{},
+	}
+	return newRPCUIContext(context.Background(), s), s, writer
+}
+
+func assertNoPendingUI(t *testing.T, s *server) {
+	t.Helper()
+
+	s.uiMu.Lock()
+	defer s.uiMu.Unlock()
+	if pending := len(s.pendingUI); pending != 0 {
+		t.Fatalf("pending UI requests = %d, want 0", pending)
+	}
+}
+
+type intResult struct {
+	value int
+	err   error
+}
+
+type boolResult struct {
+	value bool
+	err   error
+}
+
+type stringResult struct {
+	value string
+	err   error
+}
+
+func awaitIntResult(t *testing.T, ch <-chan intResult) intResult {
+	t.Helper()
+
+	select {
+	case result := <-ch:
+		return result
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for int result")
+		return intResult{}
+	}
+}
+
+func awaitBoolResult(t *testing.T, ch <-chan boolResult) boolResult {
+	t.Helper()
+
+	select {
+	case result := <-ch:
+		return result
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for bool result")
+		return boolResult{}
+	}
+}
+
+func awaitStringResult(t *testing.T, ch <-chan stringResult) stringResult {
+	t.Helper()
+
+	select {
+	case result := <-ch:
+		return result
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for string result")
+		return stringResult{}
+	}
+}
+
+//go:fix inline
+func stringPtr(value string) *string {
+	return new(value)
+}
+
+//go:fix inline
+func boolPtr(value bool) *bool {
+	return new(value)
+}
+
+func assertTextImageContent(t *testing.T, content []ai.ContentBlock, text, data, mimeType string) {
+	t.Helper()
+
+	if len(content) != 2 {
+		t.Fatalf("content len = %d, want text plus image: %#v", len(content), content)
+	}
+	if content[0].Type != ai.ContentText || content[0].Text != text {
+		t.Fatalf("text content = %#v, want %q", content[0], text)
+	}
+	if content[1].Type != ai.ContentImage || content[1].ImageData != data || content[1].MimeType != mimeType {
+		t.Fatalf("image content = %#v, want data %q mime %q", content[1], data, mimeType)
+	}
+}
+
+type fakeTarget struct {
+	mu                     sync.Mutex
+	subscriber             func(compat.Event)
+	canceled               bool
+	snapshot               compat.Snapshot
+	promptFunc             func(context.Context, compat.PromptInput) (compat.PromptResult, error)
+	promptCalls            int
+	promptInputs           []compat.PromptInput
+	steerCalls             int
+	steerInputs            []compat.UserInput
+	followUpCalls          int
+	followUpInputs         []compat.UserInput
+	setModelCalls          int
+	thinkingCalls          int
+	cycleModelResult       compat.ModelCycleResult
+	cycleModelOK           bool
+	cycleModelCalls        int
+	cycleThinkingLevel     agentloop.ThinkingLevel
+	cycleThinkingOK        bool
+	cycleThinkingCalls     int
+	sessionName            string
+	setSessionNameCalls    int
+	lastAssistantText      string
+	lastAssistantOK        bool
+	abortCalls             int
+	abortRetryCalls        int
+	abortBashCalls         int
+	executeBashCalls       int
+	bashCommand            string
+	bashResult             compat.BashResult
+	bashErr                error
+	exportHTMLCalls        int
+	exportHTMLOutputPath   string
+	exportHTMLPath         string
+	exportHTMLErr          error
+	newSessionCalls        int
+	parentSession          string
+	newSessionCancelled    bool
+	newSessionErr          error
+	switchSessionCalls     int
+	sessionPath            string
+	switchCancelled        bool
+	switchSessionErr       error
+	forkCalls              int
+	forkEntryID            string
+	forkText               string
+	forkCancelled          bool
+	forkErr                error
+	cloneCalls             int
+	cloneCancelled         bool
+	cloneErr               error
+	forkMessages           []compat.ForkMessage
+	shutdownCalls          int
+	shutdownReason         string
+	waitIdleCalls          int
+	compactCalls           int
+	sessionStats           compat.SessionStats
+	slashCommands          []compat.SlashCommand
+	setSteeringModeCalls   int
+	steeringMode           compat.QueueMode
+	setFollowUpModeCalls   int
+	followUpMode           compat.QueueMode
+	setAutoRetryCalls      int
+	autoRetryEnabled       bool
+	setAutoCompactionCalls int
+	autoCompactionEnabled  bool
+	uiContexts             []compat.UIContext
+}
+
+func (f *fakeTarget) Subscribe(fn func(compat.Event)) func() {
+	f.subscriber = fn
+	return func() { f.canceled = true }
+}
+
+func (f *fakeTarget) SetUIContext(ui compat.UIContext) {
+	f.uiContexts = append(f.uiContexts, ui)
+}
+
+func (f *fakeTarget) Prompt(ctx context.Context, input compat.PromptInput) (compat.PromptResult, error) {
+	f.mu.Lock()
+	f.promptCalls++
+	f.promptInputs = append(f.promptInputs, input)
+	f.mu.Unlock()
+	if f.promptFunc != nil {
+		return f.promptFunc(ctx, input)
+	}
+	return compat.PromptResult{}, nil
+}
+
+func (f *fakeTarget) Steer(_ context.Context, input compat.UserInput) error {
+	f.steerCalls++
+	f.steerInputs = append(f.steerInputs, input)
+	return nil
+}
+
+func (f *fakeTarget) FollowUp(_ context.Context, input compat.UserInput) error {
+	f.followUpCalls++
+	f.followUpInputs = append(f.followUpInputs, input)
+	return nil
+}
+
+func (f *fakeTarget) Abort(context.Context) (compat.AbortResult, error) {
+	f.abortCalls++
+	return compat.AbortResult{}, nil
+}
+
+func (f *fakeTarget) AbortRetry() {
+	f.abortRetryCalls++
+}
+
+func (f *fakeTarget) ExecuteBash(_ context.Context, command string) (compat.BashResult, error) {
+	f.executeBashCalls++
+	f.bashCommand = command
+	return f.bashResult, f.bashErr
+}
+
+func (f *fakeTarget) AbortBash() {
+	f.abortBashCalls++
+}
+
+func (f *fakeTarget) ExportHTML(_ context.Context, outputPath string) (string, error) {
+	f.exportHTMLCalls++
+	f.exportHTMLOutputPath = outputPath
+	return f.exportHTMLPath, f.exportHTMLErr
+}
+
+func (f *fakeTarget) NewSession(_ context.Context, parentSession string) (bool, error) {
+	f.newSessionCalls++
+	f.parentSession = parentSession
+	return f.newSessionCancelled, f.newSessionErr
+}
+
+func (f *fakeTarget) SwitchSession(_ context.Context, sessionPath string) (bool, error) {
+	f.switchSessionCalls++
+	f.sessionPath = sessionPath
+	return f.switchCancelled, f.switchSessionErr
+}
+
+func (f *fakeTarget) Fork(_ context.Context, entryID string) (string, bool, error) {
+	f.forkCalls++
+	f.forkEntryID = entryID
+	return f.forkText, f.forkCancelled, f.forkErr
+}
+
+func (f *fakeTarget) Clone(context.Context) (bool, error) {
+	f.cloneCalls++
+	return f.cloneCancelled, f.cloneErr
+}
+
+func (f *fakeTarget) ForkMessages() []compat.ForkMessage {
+	return append([]compat.ForkMessage(nil), f.forkMessages...)
+}
+
+func (f *fakeTarget) NotifySessionShutdown(_ context.Context, reason string) error {
+	f.shutdownCalls++
+	f.shutdownReason = reason
+	return nil
+}
+
+func (f *fakeTarget) SetModel(context.Context, ai.Model) error {
+	f.setModelCalls++
+	return nil
+}
+
+func (f *fakeTarget) CycleModel(context.Context) (compat.ModelCycleResult, bool, error) {
+	f.cycleModelCalls++
+	return f.cycleModelResult, f.cycleModelOK, nil
+}
+
+func (f *fakeTarget) SetThinkingLevel(context.Context, agentloop.ThinkingLevel) error {
+	f.thinkingCalls++
+	return nil
+}
+
+func (f *fakeTarget) CycleThinkingLevel(context.Context) (agentloop.ThinkingLevel, bool, error) {
+	f.cycleThinkingCalls++
+	return f.cycleThinkingLevel, f.cycleThinkingOK, nil
+}
+
+func (f *fakeTarget) Compact(context.Context, compat.CompactOptions) (compat.CompactResult, error) {
+	f.compactCalls++
+	return compat.CompactResult{}, nil
+}
+
+func (f *fakeTarget) SetSteeringMode(mode compat.QueueMode) {
+	f.setSteeringModeCalls++
+	f.steeringMode = mode
+}
+
+func (f *fakeTarget) SetFollowUpMode(mode compat.QueueMode) {
+	f.setFollowUpModeCalls++
+	f.followUpMode = mode
+}
+
+func (f *fakeTarget) SetAutoCompaction(enabled bool) {
+	f.setAutoCompactionCalls++
+	f.autoCompactionEnabled = enabled
+}
+
+func (f *fakeTarget) SetAutoRetry(enabled bool) {
+	f.setAutoRetryCalls++
+	f.autoRetryEnabled = enabled
+}
+
+func (f *fakeTarget) SetSessionName(_ context.Context, name string) error {
+	f.setSessionNameCalls++
+	f.sessionName = name
+	return nil
+}
+
+func (f *fakeTarget) LastAssistantText() (string, bool) {
+	return f.lastAssistantText, f.lastAssistantOK
+}
+
+func (f *fakeTarget) SlashCommands() []compat.SlashCommand {
+	return append([]compat.SlashCommand(nil), f.slashCommands...)
+}
+
+func (f *fakeTarget) WaitForIdle(context.Context) error {
+	f.waitIdleCalls++
+	return nil
+}
+
+func (f *fakeTarget) Snapshot() compat.Snapshot { return f.snapshot }
+func (f *fakeTarget) SessionStats() compat.SessionStats {
+	return f.sessionStats
+}
+func (f *fakeTarget) Messages() []ai.Message { return nil }
+
+func (f *fakeTarget) ResolveModel(context.Context, string, string) (ai.Model, bool) {
+	return ai.Model{}, false
+}
+func (f *fakeTarget) AvailableModels(context.Context) []ai.Model { return nil }
