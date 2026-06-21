@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sort"
 	"strings"
 	"syscall"
@@ -128,7 +129,6 @@ func run(ctx context.Context) error {
 
 	promptPaths := settingsStringSlice(settings, "prompts")
 	skillPaths := settingsStringSlice(settings, "skills")
-	extensionPaths := settingsStringSlice(settings, "extensions")
 	resourceDiagnostics := []resource.ResourceDiagnostic{}
 	templates, templateDiagnostics, err := resource.LoadPromptTemplates(resource.LoadPromptTemplatesOptions{
 		CWD:             cwd,
@@ -157,7 +157,9 @@ func run(ctx context.Context) error {
 	logResourceDiagnostics(os.Stderr, resourceDiagnostics)
 	obs.Time("context/skills/templates load")
 
-	jsExtensions := discoverJSExtensions(cfg.AgentDir, cwd, extensionPaths, os.Stderr)
+	// Declarative shell hooks live at <agentDir>/hooks.json; a missing file is
+	// a no-op (LoadShellHooks returns nil,nil).
+	hooksPath := filepath.Join(cfg.AgentDir, "hooks.json")
 
 	orch, err := orchestrator.New(ctx, orchestrator.NewOptions{
 		Repo:            session.NewJsonlSessionRepo(root),
@@ -166,7 +168,7 @@ func run(ctx context.Context) error {
 		Provider:        prov,
 		Settings:        settings,
 		SettingsManager: settingsManager,
-		JSExtensions:    jsExtensions,
+		HooksPath:       hooksPath,
 		PromptTemplates: templates,
 		Skills:          skills,
 		PromptPaths:     promptPaths,
@@ -222,14 +224,6 @@ func logResourceDiagnostics(w io.Writer, diagnostics []resource.ResourceDiagnost
 		}
 		fmt.Fprintf(w, "%s: %s\n", kind, diagnostic.Message)
 	}
-}
-
-func discoverJSExtensions(agentDir, cwd string, configuredPaths []string, stderr io.Writer) []string {
-	return resource.DiscoverJSExtensions(agentDir, cwd, configuredPaths, stderr)
-}
-
-func jsExtensionCandidates(agentDir, cwd string, configuredPaths []string) []string {
-	return resource.JSExtensionCandidates(agentDir, cwd, configuredPaths)
 }
 
 func settingsString(settings config.Settings, key string) string {

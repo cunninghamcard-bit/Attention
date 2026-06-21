@@ -182,8 +182,8 @@ type ProviderModelCost struct {
 	CacheWrite *float64
 }
 
-// ProviderOAuth marks an extension provider as OAuth-backed. The callbacks stay
-// in the JS host and are invoked through the local jshost protocol.
+// ProviderOAuth marks an extension provider as OAuth-backed. The extension
+// supplies the OAuth callbacks through the Go extension API.
 type ProviderOAuth struct {
 	Name string
 }

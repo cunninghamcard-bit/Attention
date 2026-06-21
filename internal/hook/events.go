@@ -365,9 +365,7 @@ type UserBashEvent struct {
 // BashResult:
 // .agents/references/pi/packages/coding-agent/src/core/extensions/types.ts:990-995.
 //
-// TODO(jshost): JS extensions returning operations still need a callable
-// operations.exec bridge with streaming onData. Native Go handlers are fully
-// supported here; see pi BashOperations exec:
+// Native Go handlers are fully supported here; see pi BashOperations exec:
 // .agents/references/pi/packages/coding-agent/src/core/tools/bash.ts:40-58.
 type UserBashEventResult struct {
 	Result     *BashResult

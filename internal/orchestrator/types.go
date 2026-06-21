@@ -84,10 +84,10 @@ type NewOptions struct {
 	SettingsManager *config.Manager
 
 	Extensions []ExtensionSource
-	// JSExtensions are unmodified pi TypeScript extensions loaded through the
-	// Bun-backed jshost bridge.
-	JSExtensions []string
-	Tools        []extension.ToolDefinition
+	// HooksPath points at a declarative shell-hooks file (hooks.json). A missing
+	// or empty file is a no-op.
+	HooksPath string
+	Tools     []extension.ToolDefinition
 
 	PromptTemplates []resource.PromptTemplate
 	Skills          []resource.Skill
@@ -117,10 +117,10 @@ type OpenOptions struct {
 	SettingsManager *config.Manager
 
 	Extensions []ExtensionSource
-	// JSExtensions are unmodified pi TypeScript extensions loaded through the
-	// Bun-backed jshost bridge.
-	JSExtensions []string
-	Tools        []extension.ToolDefinition
+	// HooksPath points at a declarative shell-hooks file (hooks.json). A missing
+	// or empty file is a no-op.
+	HooksPath string
+	Tools     []extension.ToolDefinition
 
 	PromptTemplates []resource.PromptTemplate
 	Skills          []resource.Skill
@@ -144,7 +144,7 @@ type runtimeConfig struct {
 	settings               config.Settings
 	settingsManager        *config.Manager
 	extensions             []ExtensionSource
-	jsExtensions           []string
+	hooksPath              string
 	tools                  []extension.ToolDefinition
 	promptTemplates        []resource.PromptTemplate
 	skills                 []resource.Skill

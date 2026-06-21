@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/cunninghamcard-bit/Attention/internal/extension"
-	"github.com/cunninghamcard-bit/Attention/internal/extension/jshost"
 	"github.com/cunninghamcard-bit/Attention/internal/harness"
 	"github.com/cunninghamcard-bit/Attention/internal/agentloop"
 	"github.com/cunninghamcard-bit/Attention/internal/ai"
@@ -34,7 +33,6 @@ type Orchestrator struct {
 	session      harness.Session
 	harness      agentHarness
 	hooks        *hook.Registry
-	jsHosts      []*jshost.Host
 	provider     *provider.Registry
 	baseProvider *provider.Registry
 	repo         *session.JsonlSessionRepo
@@ -51,7 +49,7 @@ type Orchestrator struct {
 	toolDefs            []extension.ToolDefinition
 	baseToolDefs        []extension.ToolDefinition
 	extensions          []ExtensionSource
-	jsExtensionPaths    []string
+	hooksPath           string
 	commands            map[string]extension.CommandDefinition
 	customSystemPrompt  string
 	promptTemplates     []resource.PromptTemplate
@@ -225,7 +223,7 @@ func New(ctx context.Context, opts NewOptions) (*Orchestrator, error) {
 		settings:        cloneSettings(opts.Settings),
 		settingsManager: opts.SettingsManager,
 		extensions:      opts.Extensions,
-		jsExtensions:    append([]string(nil), opts.JSExtensions...),
+		hooksPath:       opts.HooksPath,
 		tools:           opts.Tools,
 		promptTemplates: opts.PromptTemplates,
 		skills:          opts.Skills,
@@ -265,7 +263,7 @@ func Open(ctx context.Context, opts OpenOptions) (*Orchestrator, error) {
 		settings:        cloneSettings(opts.Settings),
 		settingsManager: opts.SettingsManager,
 		extensions:      opts.Extensions,
-		jsExtensions:    append([]string(nil), opts.JSExtensions...),
+		hooksPath:       opts.HooksPath,
 		tools:           opts.Tools,
 		promptTemplates: opts.PromptTemplates,
 		skills:          opts.Skills,
@@ -351,7 +349,7 @@ func assemble(ctx context.Context, s harness.Session, cfg runtimeConfig) (*Orche
 		baseProvider:          baseProvider,
 		baseToolDefs:          append([]extension.ToolDefinition(nil), cfg.tools...),
 		extensions:            append([]ExtensionSource(nil), cfg.extensions...),
-		jsExtensionPaths:      append([]string(nil), cfg.jsExtensions...),
+		hooksPath:             cfg.hooksPath,
 		customSystemPrompt:    cfg.systemPrompt,
 		promptTemplates:       append([]resource.PromptTemplate(nil), cfg.promptTemplates...),
 		skills:                append([]resource.Skill(nil), cfg.skills...),
@@ -364,6 +362,19 @@ func assemble(ctx context.Context, s harness.Session, cfg runtimeConfig) (*Orche
 
 	hooks := hook.NewRegistry()
 	o.registerEventHandlers(hooks)
+
+	// Declarative shell hooks: a hooks.json file maps lifecycle events to shell
+	// commands. A missing/empty file is a no-op (LoadShellHooks returns nil,nil).
+	if runner, err := hook.LoadShellHooks(cfg.hooksPath); err != nil {
+		o.diagnostics = append(o.diagnostics, resource.ResourceDiagnostic{
+			Type:    resource.DiagnosticError,
+			Message: fmt.Sprintf("Failed to load shell hooks: %s", err),
+			Path:    cfg.hooksPath,
+		})
+	} else if runner != nil {
+		runner.Register(hooks, s.GetMetadata().ID)
+	}
+
 	ctxFactory := o.extensionContext
 
 	// Both builtin and extension tools are extension.ToolDefinition values,
@@ -391,29 +402,7 @@ func assemble(ctx context.Context, s harness.Session, cfg runtimeConfig) (*Orche
 		}
 	}
 
-	jsHosts := []*jshost.Host{}
-	assembled := false
-	defer func() {
-		if assembled {
-			return
-		}
-		stopJSHosts(jsHosts)
-	}()
-
-	// Convert JS extension paths into ExtensionSource entries so all
-	// extensions go through a single loop below.
 	allExtensions := append([]ExtensionSource(nil), cfg.extensions...)
-	for _, path := range cfg.jsExtensions {
-		host := &jshost.Host{}
-		if err := host.Start(ctx); err != nil {
-			return nil, fmt.Errorf("orchestrator: start JS extension %q: %w", path, err)
-		}
-		jsHosts = append(jsHosts, host)
-		allExtensions = append(allExtensions, ExtensionSource{
-			Path:    path,
-			Factory: jshost.ExtensionFactory(host, path),
-		})
-	}
 
 	bindExtension := func(ext extension.Extension) error {
 		if err := o.bindExtensionCommands(ext); err != nil {
@@ -459,7 +448,6 @@ func assemble(ctx context.Context, s harness.Session, cfg runtimeConfig) (*Orche
 	}
 	o.model = model
 	o.hooks = hooks
-	o.jsHosts = jsHosts
 	o.provider = prov
 	o.tools = toolRegistry.Tools()
 	toolDefs := toolDefinitionsInOrder(toolDefOrder, toolDefsByName)
@@ -480,31 +468,14 @@ func assemble(ctx context.Context, s harness.Session, cfg runtimeConfig) (*Orche
 		CompactionSettings: compactionSettingsFrom(settings),
 		GetProviderAuth:    providerAuthResolver(prov),
 	})
-	assembled = true
 	return o, nil
 }
 
-// Close releases resources owned by the orchestrator.
+// Close releases resources owned by the orchestrator. The orchestrator no
+// longer owns external processes, so this is currently a no-op retained for
+// API stability (callers still defer Close).
 func (o *Orchestrator) Close() error {
-	o.mu.Lock()
-	hosts := append([]*jshost.Host(nil), o.jsHosts...)
-	o.jsHosts = nil
-	o.mu.Unlock()
-
-	return stopJSHosts(hosts)
-}
-
-func stopJSHosts(hosts []*jshost.Host) error {
-	errs := []error{}
-	for _, host := range hosts {
-		if host == nil {
-			continue
-		}
-		if err := host.Stop(); err != nil {
-			errs = append(errs, err)
-		}
-	}
-	return errors.Join(errs...)
+	return nil
 }
 
 type extensionResourcePaths struct {
@@ -1095,7 +1066,7 @@ func (o *Orchestrator) ReloadSettings(ctx context.Context) error {
 	repo := o.repo
 	customSystemPrompt := o.customSystemPrompt
 	extensions := append([]ExtensionSource(nil), o.extensions...)
-	jsExtensionPaths := append([]string(nil), o.jsExtensionPaths...)
+	hooksPath := o.hooksPath
 	baseToolDefs := append([]extension.ToolDefinition(nil), o.baseToolDefs...)
 	agentDir := o.agentDir
 	contextFiles := append([]resource.ContextFile(nil), o.contextFiles...)
@@ -1128,14 +1099,6 @@ func (o *Orchestrator) ReloadSettings(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if settingsManager != nil {
-		jsExtensionPaths = resource.DiscoverJSExtensions(
-			agentDirForLoad,
-			cwd,
-			settingsStringSliceValue(settings, "extensions"),
-			nil,
-		)
-	}
 	if baseProvider == nil {
 		baseProvider = defaultProviderRegistry(model, getAPIKey)
 	}
@@ -1151,7 +1114,7 @@ func (o *Orchestrator) ReloadSettings(ctx context.Context) error {
 		settings:               cloneSettings(settings),
 		settingsManager:        settingsManager,
 		extensions:             extensions,
-		jsExtensions:           jsExtensionPaths,
+		hooksPath:              hooksPath,
 		tools:                  baseToolDefs,
 		promptTemplates:        base.promptTemplates,
 		skills:                 base.skills,
@@ -1189,10 +1152,8 @@ func (o *Orchestrator) ReloadSettings(ctx context.Context) error {
 		_ = fresh.Close()
 		return &BusyError{Phase: string(currentPhase)}
 	}
-	oldHosts := append([]*jshost.Host(nil), o.jsHosts...)
 	o.harness = fresh.harness
 	o.hooks = fresh.hooks
-	o.jsHosts = fresh.jsHosts
 	o.provider = fresh.provider
 	o.baseProvider = fresh.baseProvider
 	o.model = fresh.model
@@ -1206,7 +1167,7 @@ func (o *Orchestrator) ReloadSettings(ctx context.Context) error {
 	o.toolDefs = fresh.toolDefs
 	o.baseToolDefs = fresh.baseToolDefs
 	o.extensions = fresh.extensions
-	o.jsExtensionPaths = fresh.jsExtensionPaths
+	o.hooksPath = fresh.hooksPath
 	o.commands = fresh.commands
 	o.customSystemPrompt = fresh.customSystemPrompt
 	o.promptTemplates = fresh.promptTemplates
@@ -1223,9 +1184,6 @@ func (o *Orchestrator) ReloadSettings(ctx context.Context) error {
 	o.followUpMode = fresh.followUpMode
 	o.mu.Unlock()
 
-	if err := stopJSHosts(oldHosts); err != nil {
-		return err
-	}
 	o.emitResourcesUpdate(ctx, current, previous)
 	return nil
 }

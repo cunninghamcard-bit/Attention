@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -226,69 +225,3 @@ func TestSettingsStringSliceCopiesStringSlice(t *testing.T) {
 	}
 }
 
-func TestJSExtensionCandidatesLoadsGlobalAndProjectTypeScript(t *testing.T) {
-	agentDir := t.TempDir()
-	cwd := t.TempDir()
-	extraDir := t.TempDir()
-
-	globalDir := filepath.Join(agentDir, "extensions")
-	projectDir := filepath.Join(cwd, config.ConfigDirName, "extensions")
-	if err := os.MkdirAll(globalDir, 0o700); err != nil {
-		t.Fatalf("mkdir global extensions: %v", err)
-	}
-	if err := os.MkdirAll(projectDir, 0o700); err != nil {
-		t.Fatalf("mkdir project extensions: %v", err)
-	}
-	globalExt := filepath.Join(globalDir, "global.ts")
-	projectExt := filepath.Join(projectDir, "project.ts")
-	extraExt := filepath.Join(extraDir, "extra.ts")
-	explicitExt := filepath.Join(cwd, "standalone.ts")
-	if err := os.WriteFile(globalExt, []byte("export default function () {}"), 0o600); err != nil {
-		t.Fatalf("write global extension: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(globalDir, "ignored.js"), []byte(""), 0o600); err != nil {
-		t.Fatalf("write ignored extension: %v", err)
-	}
-	if err := os.WriteFile(projectExt, []byte("export default function () {}"), 0o600); err != nil {
-		t.Fatalf("write project extension: %v", err)
-	}
-	if err := os.WriteFile(extraExt, []byte("export default function () {}"), 0o600); err != nil {
-		t.Fatalf("write extra extension: %v", err)
-	}
-	if err := os.WriteFile(explicitExt, []byte("export default function () {}"), 0o600); err != nil {
-		t.Fatalf("write explicit extension: %v", err)
-	}
-
-	got := jsExtensionCandidates(agentDir, cwd, []string{extraDir, "standalone.ts"})
-	want := []string{globalExt, projectExt, extraExt, explicitExt}
-	if len(got) != len(want) {
-		t.Fatalf("jsExtensionCandidates len = %d, want %d: %v", len(got), len(want), got)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("jsExtensionCandidates[%d] = %q, want %q; all=%v", i, got[i], want[i], got)
-		}
-	}
-}
-
-func TestDiscoverJSExtensionsSkipsWithWarningWhenBunMissing(t *testing.T) {
-	t.Setenv("PATH", t.TempDir())
-
-	agentDir := t.TempDir()
-	extensionDir := filepath.Join(agentDir, "extensions")
-	if err := os.MkdirAll(extensionDir, 0o700); err != nil {
-		t.Fatalf("mkdir extensions: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(extensionDir, "ext.ts"), []byte("export default function () {}"), 0o600); err != nil {
-		t.Fatalf("write extension: %v", err)
-	}
-
-	var stderr bytes.Buffer
-	got := discoverJSExtensions(agentDir, t.TempDir(), nil, &stderr)
-	if got != nil {
-		t.Fatalf("discoverJSExtensions = %v, want nil without bun", got)
-	}
-	if !strings.Contains(stderr.String(), "bun not found") || !strings.Contains(stderr.String(), "skipping 1") {
-		t.Fatalf("stderr = %q, want bun skip warning", stderr.String())
-	}
-}
