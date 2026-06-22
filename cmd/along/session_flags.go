@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/cunninghamcard-bit/Attention/internal/agentloop"
 	"github.com/cunninghamcard-bit/Attention/internal/config"
 	"github.com/cunninghamcard-bit/Attention/internal/execenv"
 	"github.com/cunninghamcard-bit/Attention/internal/extension"
@@ -30,6 +31,7 @@ type sessionFlags struct {
 	resume    bool   // --resume: headless => most recent session (see above)
 	sessionID string // --session-id <id>: resume-or-create a session with this id
 	noSession bool   // --no-session: ephemeral, non-persisted session
+	fork      string // --fork <path-or-id>: fork a source session into a NEW session
 }
 
 // sessionPlanKind selects which orchestrator constructor path a resolved plan
@@ -46,6 +48,10 @@ const (
 	// planEphemeral builds an in-memory session and passes it as opts.Session to
 	// orchestrator.New, which then skips repo.Create. Nothing is persisted.
 	planEphemeral
+	// planFork creates a fresh persisted session whose header records a parent
+	// session path (CreateOptions.ParentSessionPath), forking from a source
+	// session selected by --fork.
+	planFork
 )
 
 // sessionPlan is the resolved decision: which constructor to call and with what
@@ -70,7 +76,31 @@ type sessionPlan struct {
 //     (--session, --continue, --resume), since an ephemeral session cannot also
 //     resume a persisted one.
 //   - --session, --continue, and --resume are mutually exclusive selectors.
+//   - --fork creates a brand-new session forked from a source; it cannot be
+//     combined with any session-resume/-selection flag.
 func validateSessionFlags(f sessionFlags) error {
+	if f.fork != "" {
+		var conflicts []string
+		if f.session != "" {
+			conflicts = append(conflicts, "--session")
+		}
+		if f.cont {
+			conflicts = append(conflicts, "--continue")
+		}
+		if f.resume {
+			conflicts = append(conflicts, "--resume")
+		}
+		if f.sessionID != "" {
+			conflicts = append(conflicts, "--session-id")
+		}
+		if f.noSession {
+			conflicts = append(conflicts, "--no-session")
+		}
+		if len(conflicts) > 0 {
+			return fmt.Errorf("--fork cannot be combined with %s", strings.Join(conflicts, ", "))
+		}
+	}
+
 	if f.sessionID != "" {
 		var conflicts []string
 		if f.session != "" {
@@ -146,6 +176,23 @@ func resolveSessionPlan(
 	f sessionFlags,
 ) (sessionPlan, error) {
 	switch {
+	case f.fork != "":
+		// Resolve the source session (path or id) and create a fresh persisted
+		// session whose header records the source path as its parent. The fork
+		// starts in the process cwd, mirroring "fork into a new session".
+		src, err := resolveSessionTarget(ctx, repo, cwd, f.fork)
+		if err != nil {
+			return sessionPlan{}, err
+		}
+		return sessionPlan{
+			kind: planFork,
+			createOptions: session.JsonlSessionCreateOptions{
+				CWD:               cwd,
+				ParentSessionPath: src.Path,
+			},
+			cwd: cwd,
+		}, nil
+
 	case f.noSession:
 		return sessionPlan{
 			kind:      planEphemeral,
@@ -323,57 +370,69 @@ func isExistingFile(value string) bool {
 // avoids restating the ~15 shared fields once per constructor; applyTo copies
 // them into the concrete NewOptions/OpenOptions just before the call.
 type orchestratorCommonOptions struct {
-	ModelID         string
-	Provider        *provider.Registry
-	Settings        config.Settings
-	SettingsManager *config.Manager
-	HooksPath       string
-	PromptTemplates []resource.PromptTemplate
-	Skills          []resource.Skill
-	PromptPaths     []string
-	SkillPaths      []string
-	AgentDir        string
-	ContextFiles    []resource.ContextFile
-	Diagnostics     []resource.ResourceDiagnostic
-	ExecutionEnv    execenv.ExecutionEnv
-	Tools           []extension.ToolDefinition
+	ModelID            string
+	ModelProvider      string
+	Provider           *provider.Registry
+	Settings           config.Settings
+	SettingsManager    *config.Manager
+	HooksPath          string
+	SystemPrompt       string
+	AppendSystemPrompt string
+	ThinkingLevel      agentloop.ThinkingLevel
+	PromptTemplates    []resource.PromptTemplate
+	Skills             []resource.Skill
+	PromptPaths        []string
+	SkillPaths         []string
+	AgentDir           string
+	ContextFiles       []resource.ContextFile
+	Diagnostics        []resource.ResourceDiagnostic
+	ExecutionEnv       execenv.ExecutionEnv
+	Tools              []extension.ToolDefinition
 }
 
 func (c orchestratorCommonOptions) newOptions() orchestrator.NewOptions {
 	return orchestrator.NewOptions{
-		ModelID:         c.ModelID,
-		Provider:        c.Provider,
-		Settings:        c.Settings,
-		SettingsManager: c.SettingsManager,
-		HooksPath:       c.HooksPath,
-		PromptTemplates: c.PromptTemplates,
-		Skills:          c.Skills,
-		PromptPaths:     c.PromptPaths,
-		SkillPaths:      c.SkillPaths,
-		AgentDir:        c.AgentDir,
-		ContextFiles:    c.ContextFiles,
-		Diagnostics:     c.Diagnostics,
-		ExecutionEnv:    c.ExecutionEnv,
-		Tools:           c.Tools,
+		ModelID:            c.ModelID,
+		ModelProvider:      c.ModelProvider,
+		Provider:           c.Provider,
+		Settings:           c.Settings,
+		SettingsManager:    c.SettingsManager,
+		HooksPath:          c.HooksPath,
+		SystemPrompt:       c.SystemPrompt,
+		AppendSystemPrompt: c.AppendSystemPrompt,
+		ThinkingLevel:      c.ThinkingLevel,
+		PromptTemplates:    c.PromptTemplates,
+		Skills:             c.Skills,
+		PromptPaths:        c.PromptPaths,
+		SkillPaths:         c.SkillPaths,
+		AgentDir:           c.AgentDir,
+		ContextFiles:       c.ContextFiles,
+		Diagnostics:        c.Diagnostics,
+		ExecutionEnv:       c.ExecutionEnv,
+		Tools:              c.Tools,
 	}
 }
 
 func (c orchestratorCommonOptions) openOptions() orchestrator.OpenOptions {
 	return orchestrator.OpenOptions{
-		ModelID:         c.ModelID,
-		Provider:        c.Provider,
-		Settings:        c.Settings,
-		SettingsManager: c.SettingsManager,
-		HooksPath:       c.HooksPath,
-		PromptTemplates: c.PromptTemplates,
-		Skills:          c.Skills,
-		PromptPaths:     c.PromptPaths,
-		SkillPaths:      c.SkillPaths,
-		AgentDir:        c.AgentDir,
-		ContextFiles:    c.ContextFiles,
-		Diagnostics:     c.Diagnostics,
-		ExecutionEnv:    c.ExecutionEnv,
-		Tools:           c.Tools,
+		ModelID:            c.ModelID,
+		ModelProvider:      c.ModelProvider,
+		Provider:           c.Provider,
+		Settings:           c.Settings,
+		SettingsManager:    c.SettingsManager,
+		HooksPath:          c.HooksPath,
+		SystemPrompt:       c.SystemPrompt,
+		AppendSystemPrompt: c.AppendSystemPrompt,
+		ThinkingLevel:      c.ThinkingLevel,
+		PromptTemplates:    c.PromptTemplates,
+		Skills:             c.Skills,
+		PromptPaths:        c.PromptPaths,
+		SkillPaths:         c.SkillPaths,
+		AgentDir:           c.AgentDir,
+		ContextFiles:       c.ContextFiles,
+		Diagnostics:        c.Diagnostics,
+		ExecutionEnv:       c.ExecutionEnv,
+		Tools:              c.Tools,
 	}
 }
 
@@ -399,7 +458,8 @@ func buildOrchestrator(
 		opts := common.newOptions()
 		opts.Session = plan.ephemeral
 		return orchestrator.New(ctx, opts)
-	default: // planNew
+	default: // planNew, planFork — both create a fresh session; planFork's
+		// CreateOptions carries ParentSessionPath so the header records the fork.
 		opts := common.newOptions()
 		opts.Repo = repo
 		opts.CreateOptions = plan.createOptions

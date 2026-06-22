@@ -91,6 +91,32 @@ func TestValidateSessionFlags(t *testing.T) {
 			flags:   sessionFlags{cont: true, resume: true},
 			wantErr: "mutually exclusive",
 		},
+		{name: "fork only", flags: sessionFlags{fork: "abc"}},
+		{
+			name:    "fork + session",
+			flags:   sessionFlags{fork: "abc", session: "def"},
+			wantErr: "--fork cannot be combined",
+		},
+		{
+			name:    "fork + continue",
+			flags:   sessionFlags{fork: "abc", cont: true},
+			wantErr: "--fork cannot be combined",
+		},
+		{
+			name:    "fork + resume",
+			flags:   sessionFlags{fork: "abc", resume: true},
+			wantErr: "--fork cannot be combined",
+		},
+		{
+			name:    "fork + session-id",
+			flags:   sessionFlags{fork: "abc", sessionID: "id"},
+			wantErr: "--fork cannot be combined",
+		},
+		{
+			name:    "fork + no-session",
+			flags:   sessionFlags{fork: "abc", noSession: true},
+			wantErr: "--fork cannot be combined",
+		},
 	}
 
 	for _, tt := range tests {

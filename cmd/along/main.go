@@ -13,18 +13,17 @@ import (
 	"strings"
 	"syscall"
 
-	printmode "github.com/cunninghamcard-bit/Attention/internal/mode/print"
-	rpcmode "github.com/cunninghamcard-bit/Attention/internal/mode/rpc"
-	"github.com/cunninghamcard-bit/Attention/internal/orchestrator"
 	"github.com/cunninghamcard-bit/Attention/internal/ai"
 	"github.com/cunninghamcard-bit/Attention/internal/auth"
 	"github.com/cunninghamcard-bit/Attention/internal/config"
 	"github.com/cunninghamcard-bit/Attention/internal/execenv/local"
+	printmode "github.com/cunninghamcard-bit/Attention/internal/mode/print"
+	rpcmode "github.com/cunninghamcard-bit/Attention/internal/mode/rpc"
 	"github.com/cunninghamcard-bit/Attention/internal/obs"
+	"github.com/cunninghamcard-bit/Attention/internal/orchestrator"
 	"github.com/cunninghamcard-bit/Attention/internal/provider"
 	"github.com/cunninghamcard-bit/Attention/internal/resource"
 	"github.com/cunninghamcard-bit/Attention/internal/session"
-	"github.com/cunninghamcard-bit/Attention/internal/tool/builtin"
 )
 
 type modeRunner func(context.Context, *orchestrator.Orchestrator, []string) error
@@ -54,8 +53,45 @@ func run(ctx context.Context) error {
 	fs := flag.NewFlagSet("along", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	modelID := fs.String("model", "claude-sonnet-4-5", "model ID")
+	providerFlag := fs.String("provider", "", "provider name used to resolve the model id")
 	mode := fs.String("mode", "print", "output mode: print, json, or rpc")
 	apiKey := fs.String("api-key", "", "API key override for the selected model's provider (highest priority, not persisted)")
+	// System prompt.
+	systemPromptFlag := fs.String("system-prompt", "", "system prompt (replaces the default coding-assistant prompt)")
+	var appendSystemPrompt repeatableFlag
+	fs.Var(&appendSystemPrompt, "append-system-prompt", "append text to the system prompt (can be used multiple times)")
+	// Thinking level.
+	thinkingFlag := fs.String("thinking", "", "thinking level: low, medium, or high")
+	// Tools.
+	toolsFlag := fs.String("tools", "", "comma-separated allowlist of tool names to enable")
+	fs.StringVar(toolsFlag, "t", "", "alias for --tools")
+	excludeToolsFlag := fs.String("exclude-tools", "", "comma-separated denylist of tool names to disable")
+	fs.StringVar(excludeToolsFlag, "xt", "", "alias for --exclude-tools")
+	noToolsFlag := fs.Bool("no-tools", false, "disable all tools")
+	fs.BoolVar(noToolsFlag, "nt", false, "alias for --no-tools")
+	noBuiltinToolsFlag := fs.Bool("no-builtin-tools", false, "disable built-in tools")
+	fs.BoolVar(noBuiltinToolsFlag, "nbt", false, "alias for --no-builtin-tools")
+	// Session directory.
+	sessionDirFlag := fs.String("session-dir", "", "directory for session storage and lookup")
+	// Resources.
+	var skillFlag repeatableFlag
+	fs.Var(&skillFlag, "skill", "load a skill file or directory (can be used multiple times)")
+	noSkillsFlag := fs.Bool("no-skills", false, "disable skills discovery and loading")
+	fs.BoolVar(noSkillsFlag, "ns", false, "alias for --no-skills")
+	var promptTemplateFlag repeatableFlag
+	fs.Var(&promptTemplateFlag, "prompt-template", "load a prompt template file or directory (can be used multiple times)")
+	noPromptTemplatesFlag := fs.Bool("no-prompt-templates", false, "disable prompt template discovery and loading")
+	fs.BoolVar(noPromptTemplatesFlag, "np", false, "alias for --no-prompt-templates")
+	noContextFilesFlag := fs.Bool("no-context-files", false, "disable AGENTS.md and CLAUDE.md discovery and loading")
+	fs.BoolVar(noContextFilesFlag, "nc", false, "alias for --no-context-files")
+	// Session name / fork.
+	nameFlag := fs.String("name", "", "set session display name")
+	fs.StringVar(nameFlag, "n", "", "alias for --name")
+	forkFlag := fs.String("fork", "", "fork a session file or partial id into a new session")
+	// Early-exit flags.
+	listModelsFlag := fs.Bool("list-models", false, "list available models and exit")
+	versionFlag := fs.Bool("version", false, "show version number and exit")
+	fs.BoolVar(versionFlag, "v", false, "alias for --version")
 	// Session-selection flags, ported from pi (main.ts createSessionManager) and
 	// adapted for a headless kernel. See session_flags.go for headless semantics.
 	sessionFlag := fs.String("session", "", "resume a specific session by path or id")
@@ -69,7 +105,19 @@ func run(ctx context.Context) error {
 		}
 		return err
 	}
+	// --version short-circuits before any setup, like pi.
+	if *versionFlag {
+		fmt.Println(versionString())
+		return nil
+	}
 	if err := validateMode(*mode); err != nil {
+		return err
+	}
+	thinkingLevel, err := resolveThinkingLevel(*thinkingFlag)
+	if err != nil {
+		return err
+	}
+	if err := validateName(*nameFlag, fs); err != nil {
 		return err
 	}
 	sessFlags := sessionFlags{
@@ -78,6 +126,7 @@ func run(ctx context.Context) error {
 		resume:    *resumeFlag,
 		sessionID: *sessionIDFlag,
 		noSession: *noSessionFlag,
+		fork:      *forkFlag,
 	}
 	if err := validateSessionFlags(sessFlags); err != nil {
 		return err
@@ -98,13 +147,19 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err := resolveModel(prov, *modelID); err != nil {
+	// --list-models prints the available models and exits without building the
+	// orchestrator or running a prompt (pi: --list-models).
+	if *listModelsFlag {
+		printModels(os.Stdout, prov.All())
+		return nil
+	}
+	if err := resolveModelWithProvider(prov, *modelID, *providerFlag); err != nil {
 		return err
 	}
 	// pi applies --api-key as a runtime override for the selected model's
 	// provider: .agents/references/pi/packages/coding-agent/src/main.ts:586.
 	if *apiKey != "" {
-		if m, ok := prov.Resolve(*modelID); ok {
+		if m, ok := resolveModelHint(prov, *modelID, *providerFlag); ok {
 			prov.SetRuntimeAPIKey(m.Provider, *apiKey)
 		}
 	}
@@ -122,7 +177,13 @@ func run(ctx context.Context) error {
 		}
 	}
 
-	root, err := sessionsRoot()
+	defaultRoot, err := sessionsRoot()
+	if err != nil {
+		return err
+	}
+	// --session-dir > ALONG_CODING_AGENT_SESSION_DIR env (honored inside
+	// sessionsRoot) > default. An explicit flag value expands a leading ~.
+	root, err := resolveSessionDir(*sessionDirFlag, defaultRoot)
 	if err != nil {
 		return err
 	}
@@ -157,33 +218,54 @@ func run(ctx context.Context) error {
 	shellCommandPrefix := settingsString(settings, "shellCommandPrefix")
 	env := local.New(cwd, local.WithShell(shellPath))
 
-	promptPaths := settingsStringSlice(settings, "prompts")
-	skillPaths := settingsStringSlice(settings, "skills")
+	// --prompt-template / --skill append explicit paths to the settings-derived
+	// ones; --no-* flags skip discovery entirely (empty result, no diagnostics).
+	promptPaths := append(settingsStringSlice(settings, "prompts"), promptTemplateFlag...)
+	skillPaths := append(settingsStringSlice(settings, "skills"), skillFlag...)
 	resourceDiagnostics := []resource.ResourceDiagnostic{}
-	templates, templateDiagnostics, err := resource.LoadPromptTemplates(resource.LoadPromptTemplatesOptions{
-		CWD:             cwd,
-		AgentDir:        cfg.AgentDir,
-		Paths:           promptPaths,
-		IncludeDefaults: true,
-	})
-	resourceDiagnostics = append(resourceDiagnostics, templateDiagnostics...)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "load prompt templates: %v\n", err)
-		templates = nil
+
+	var templates []resource.PromptTemplate
+	if *noPromptTemplatesFlag {
+		promptPaths = []string{}
+	} else {
+		var templateDiagnostics []resource.ResourceDiagnostic
+		templates, templateDiagnostics, err = resource.LoadPromptTemplates(resource.LoadPromptTemplatesOptions{
+			CWD:             cwd,
+			AgentDir:        cfg.AgentDir,
+			Paths:           promptPaths,
+			IncludeDefaults: true,
+		})
+		resourceDiagnostics = append(resourceDiagnostics, templateDiagnostics...)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "load prompt templates: %v\n", err)
+			templates = nil
+		}
 	}
-	skills, skillDiagnostics, err := resource.LoadSkills(resource.LoadSkillsOptions{
-		CWD:             cwd,
-		AgentDir:        cfg.AgentDir,
-		Paths:           skillPaths,
-		IncludeDefaults: true,
-	})
-	resourceDiagnostics = append(resourceDiagnostics, skillDiagnostics...)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "load skills: %v\n", err)
-		skills = nil
+
+	var skills []resource.Skill
+	if *noSkillsFlag {
+		skillPaths = []string{}
+	} else {
+		var skillDiagnostics []resource.ResourceDiagnostic
+		skills, skillDiagnostics, err = resource.LoadSkills(resource.LoadSkillsOptions{
+			CWD:             cwd,
+			AgentDir:        cfg.AgentDir,
+			Paths:           skillPaths,
+			IncludeDefaults: true,
+		})
+		resourceDiagnostics = append(resourceDiagnostics, skillDiagnostics...)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "load skills: %v\n", err)
+			skills = nil
+		}
 	}
-	projectContext, contextDiagnostics := resource.LoadContextFiles(cwd, cfg.AgentDir)
-	resourceDiagnostics = append(resourceDiagnostics, contextDiagnostics...)
+
+	var projectContext []resource.ContextFile
+	if !*noContextFilesFlag {
+		var contextDiagnostics []resource.ResourceDiagnostic
+		projectContext, contextDiagnostics = resource.LoadContextFiles(cwd, cfg.AgentDir)
+		resourceDiagnostics = append(resourceDiagnostics, contextDiagnostics...)
+	}
 	logResourceDiagnostics(os.Stderr, resourceDiagnostics)
 	obs.Time("context/skills/templates load")
 
@@ -191,29 +273,63 @@ func run(ctx context.Context) error {
 	// a no-op (LoadShellHooks returns nil,nil).
 	hooksPath := filepath.Join(cfg.AgentDir, "hooks.json")
 
+	// Tool selection: --no-tools/--no-builtin-tools/--tools/--exclude-tools.
+	// Precedence and base sets are handled in selectTools (cli_flags.go).
+	tools, err := selectTools(
+		toolSelection{
+			tools:         splitCommaList(*toolsFlag),
+			excludeTools:  splitCommaList(*excludeToolsFlag),
+			noTools:       *noToolsFlag,
+			noBuiltinTool: *noBuiltinToolsFlag,
+		},
+		baseToolSet(env, shellCommandPrefix),
+		allToolSet(env, shellCommandPrefix),
+	)
+	if err != nil {
+		return err
+	}
+
+	// Append-system-prompt entries join with blank lines, mirroring pi's
+	// concatenation of repeated --append-system-prompt values.
+	appendSystemPromptText := strings.Join(appendSystemPrompt, "\n\n")
+
 	// Shared option fields, identical between the New and Open constructor
 	// paths. Only Repo/CreateOptions/Metadata/Session differ per plan, so they
 	// are applied below rather than duplicated here.
 	common := orchestratorCommonOptions{
-		ModelID:         *modelID,
-		Provider:        prov,
-		Settings:        settings,
-		SettingsManager: settingsManager,
-		HooksPath:       hooksPath,
-		PromptTemplates: templates,
-		Skills:          skills,
-		PromptPaths:     promptPaths,
-		SkillPaths:      skillPaths,
-		AgentDir:        cfg.AgentDir,
-		ContextFiles:    projectContext,
-		Diagnostics:     resourceDiagnostics,
-		ExecutionEnv:    env,
-		Tools:           builtin.NewCodingTools(env, shellCommandPrefix),
+		ModelID:            *modelID,
+		ModelProvider:      *providerFlag,
+		Provider:           prov,
+		Settings:           settings,
+		SettingsManager:    settingsManager,
+		HooksPath:          hooksPath,
+		SystemPrompt:       *systemPromptFlag,
+		AppendSystemPrompt: appendSystemPromptText,
+		ThinkingLevel:      thinkingLevel,
+		PromptTemplates:    templates,
+		Skills:             skills,
+		PromptPaths:        promptPaths,
+		SkillPaths:         skillPaths,
+		AgentDir:           cfg.AgentDir,
+		ContextFiles:       projectContext,
+		Diagnostics:        resourceDiagnostics,
+		ExecutionEnv:       env,
+		Tools:              tools,
 	}
 
 	orch, err := buildOrchestrator(ctx, repo, plan, common)
 	if err != nil {
 		return fmt.Errorf("create orchestrator: %w", err)
+	}
+	// --name sets the display name on a freshly created session (new or forked);
+	// pi sets the name right after the session is created.
+	if name := strings.TrimSpace(*nameFlag); name != "" && (plan.kind == planNew || plan.kind == planFork) {
+		if err := orch.SetSessionName(ctx, name); err != nil {
+			if closeErr := orch.Close(); closeErr != nil {
+				return errors.Join(fmt.Errorf("set session name: %w", err), fmt.Errorf("close orchestrator: %w", closeErr))
+			}
+			return fmt.Errorf("set session name: %w", err)
+		}
 	}
 	obs.Time("orchestrator create")
 	obs.Report(os.Stderr)
@@ -338,6 +454,56 @@ func resolveModel(prov *provider.Registry, modelID string) error {
 		return nil
 	}
 	return unknownModelError(modelID, prov.All())
+}
+
+// resolveModelHint resolves a model id, honoring an optional --provider hint to
+// disambiguate ids that exist under multiple providers.
+func resolveModelHint(prov *provider.Registry, modelID, providerHint string) (ai.Model, bool) {
+	if providerHint != "" {
+		return prov.ResolveByProvider(providerHint, modelID)
+	}
+	return prov.Resolve(modelID)
+}
+
+// resolveModelWithProvider validates that modelID resolves under the optional
+// --provider hint, producing a friendly error otherwise.
+func resolveModelWithProvider(prov *provider.Registry, modelID, providerHint string) error {
+	if _, ok := resolveModelHint(prov, modelID, providerHint); ok {
+		return nil
+	}
+	if providerHint != "" {
+		return fmt.Errorf("unknown model %q for provider %q (available: %s)", modelID, providerHint, strings.Join(modelIDs(prov.All()), ", "))
+	}
+	return unknownModelError(modelID, prov.All())
+}
+
+// printModels writes the available models (id and provider) to w, one per line,
+// sorted by id then provider. Used by --list-models.
+func printModels(w io.Writer, models []ai.Model) {
+	sorted := append([]ai.Model(nil), models...)
+	sort.Slice(sorted, func(i, j int) bool {
+		if sorted[i].ID != sorted[j].ID {
+			return sorted[i].ID < sorted[j].ID
+		}
+		return sorted[i].Provider < sorted[j].Provider
+	})
+	for _, model := range sorted {
+		if model.ID == "" {
+			continue
+		}
+		fmt.Fprintf(w, "%s\t%s\n", model.ID, model.Provider)
+	}
+}
+
+func modelIDs(models []ai.Model) []string {
+	ids := make([]string, 0, len(models))
+	for _, model := range models {
+		if model.ID != "" {
+			ids = append(ids, model.ID)
+		}
+	}
+	sort.Strings(ids)
+	return ids
 }
 
 func unknownModelError(modelID string, models []ai.Model) error {

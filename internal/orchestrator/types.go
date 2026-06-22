@@ -7,12 +7,12 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/cunninghamcard-bit/Attention/internal/extension"
-	"github.com/cunninghamcard-bit/Attention/internal/harness"
 	"github.com/cunninghamcard-bit/Attention/internal/agentloop"
 	"github.com/cunninghamcard-bit/Attention/internal/ai"
 	"github.com/cunninghamcard-bit/Attention/internal/config"
 	"github.com/cunninghamcard-bit/Attention/internal/execenv"
+	"github.com/cunninghamcard-bit/Attention/internal/extension"
+	"github.com/cunninghamcard-bit/Attention/internal/harness"
 	"github.com/cunninghamcard-bit/Attention/internal/message"
 	"github.com/cunninghamcard-bit/Attention/internal/provider"
 	"github.com/cunninghamcard-bit/Attention/internal/resource"
@@ -73,14 +73,20 @@ type NewOptions struct {
 	CreateOptions session.JsonlSessionCreateOptions
 	Session       harness.Session
 
-	Model           ai.Model
-	ModelID         string
-	Provider        *provider.Registry
-	ThinkingLevel   agentloop.ThinkingLevel
-	SystemPrompt    string
-	GetAPIKey       func(ctx context.Context, provider string) (string, error)
-	Settings        config.Settings
-	SettingsManager *config.Manager
+	Model   ai.Model
+	ModelID string
+	// ModelProvider is an optional provider hint (CLI --provider) used to
+	// disambiguate a model id that exists under multiple providers.
+	ModelProvider string
+	Provider      *provider.Registry
+	ThinkingLevel agentloop.ThinkingLevel
+	SystemPrompt  string
+	// AppendSystemPrompt is appended verbatim to the resolved system prompt
+	// (CLI --append-system-prompt). Mirrors pi's appendSystemPrompt.
+	AppendSystemPrompt string
+	GetAPIKey          func(ctx context.Context, provider string) (string, error)
+	Settings           config.Settings
+	SettingsManager    *config.Manager
 
 	Extensions []ExtensionSource
 	// HooksPath points at a declarative shell-hooks file (hooks.json). A missing
@@ -106,14 +112,20 @@ type OpenOptions struct {
 	Metadata session.Metadata
 	Session  harness.Session
 
-	Model           ai.Model
-	ModelID         string
-	Provider        *provider.Registry
-	ThinkingLevel   agentloop.ThinkingLevel
-	SystemPrompt    string
-	GetAPIKey       func(ctx context.Context, provider string) (string, error)
-	Settings        config.Settings
-	SettingsManager *config.Manager
+	Model   ai.Model
+	ModelID string
+	// ModelProvider is an optional provider hint (CLI --provider) used to
+	// disambiguate a model id that exists under multiple providers.
+	ModelProvider string
+	Provider      *provider.Registry
+	ThinkingLevel agentloop.ThinkingLevel
+	SystemPrompt  string
+	// AppendSystemPrompt is appended verbatim to the resolved system prompt
+	// (CLI --append-system-prompt). Mirrors pi's appendSystemPrompt.
+	AppendSystemPrompt string
+	GetAPIKey          func(ctx context.Context, provider string) (string, error)
+	Settings           config.Settings
+	SettingsManager    *config.Manager
 
 	Extensions []ExtensionSource
 	// HooksPath points at a declarative shell-hooks file (hooks.json). A missing
@@ -135,10 +147,12 @@ type OpenOptions struct {
 type runtimeConfig struct {
 	model                  ai.Model
 	modelID                string
+	modelProvider          string
 	provider               *provider.Registry
 	repo                   *session.JsonlSessionRepo
 	thinkingLevel          agentloop.ThinkingLevel
 	systemPrompt           string
+	appendSystemPrompt     string
 	getAPIKey              func(ctx context.Context, provider string) (string, error)
 	settings               config.Settings
 	settingsManager        *config.Manager

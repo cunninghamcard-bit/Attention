@@ -11,13 +11,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cunninghamcard-bit/Attention/internal/extension"
-	"github.com/cunninghamcard-bit/Attention/internal/harness"
 	"github.com/cunninghamcard-bit/Attention/internal/agentloop"
 	"github.com/cunninghamcard-bit/Attention/internal/ai"
 	"github.com/cunninghamcard-bit/Attention/internal/auth"
 	"github.com/cunninghamcard-bit/Attention/internal/config"
 	"github.com/cunninghamcard-bit/Attention/internal/execenv"
+	"github.com/cunninghamcard-bit/Attention/internal/extension"
+	"github.com/cunninghamcard-bit/Attention/internal/harness"
 	"github.com/cunninghamcard-bit/Attention/internal/hook"
 	"github.com/cunninghamcard-bit/Attention/internal/message"
 	"github.com/cunninghamcard-bit/Attention/internal/provider"
@@ -211,26 +211,28 @@ func New(ctx context.Context, opts NewOptions) (*Orchestrator, error) {
 	}
 
 	cfg := runtimeConfig{
-		model:           opts.Model,
-		modelID:         opts.ModelID,
-		provider:        opts.Provider,
-		repo:            opts.Repo,
-		thinkingLevel:   opts.ThinkingLevel,
-		systemPrompt:    opts.SystemPrompt,
-		getAPIKey:       opts.GetAPIKey,
-		settings:        cloneSettings(opts.Settings),
-		settingsManager: opts.SettingsManager,
-		extensions:      opts.Extensions,
-		hooksPath:       opts.HooksPath,
-		tools:           opts.Tools,
-		promptTemplates: opts.PromptTemplates,
-		skills:          opts.Skills,
-		promptPaths:     append([]string(nil), opts.PromptPaths...),
-		skillPaths:      append([]string(nil), opts.SkillPaths...),
-		agentDir:        opts.AgentDir,
-		contextFiles:    opts.ContextFiles,
-		diagnostics:     append([]resource.ResourceDiagnostic(nil), opts.Diagnostics...),
-		executionEnv:    opts.ExecutionEnv,
+		model:              opts.Model,
+		modelID:            opts.ModelID,
+		modelProvider:      opts.ModelProvider,
+		provider:           opts.Provider,
+		repo:               opts.Repo,
+		thinkingLevel:      opts.ThinkingLevel,
+		systemPrompt:       opts.SystemPrompt,
+		appendSystemPrompt: opts.AppendSystemPrompt,
+		getAPIKey:          opts.GetAPIKey,
+		settings:           cloneSettings(opts.Settings),
+		settingsManager:    opts.SettingsManager,
+		extensions:         opts.Extensions,
+		hooksPath:          opts.HooksPath,
+		tools:              opts.Tools,
+		promptTemplates:    opts.PromptTemplates,
+		skills:             opts.Skills,
+		promptPaths:        append([]string(nil), opts.PromptPaths...),
+		skillPaths:         append([]string(nil), opts.SkillPaths...),
+		agentDir:           opts.AgentDir,
+		contextFiles:       opts.ContextFiles,
+		diagnostics:        append([]resource.ResourceDiagnostic(nil), opts.Diagnostics...),
+		executionEnv:       opts.ExecutionEnv,
 	}
 	return assemble(ctx, s, cfg)
 }
@@ -251,27 +253,29 @@ func Open(ctx context.Context, opts OpenOptions) (*Orchestrator, error) {
 	}
 
 	cfg := runtimeConfig{
-		model:           opts.Model,
-		modelID:         opts.ModelID,
-		provider:        opts.Provider,
-		repo:            opts.Repo,
-		thinkingLevel:   opts.ThinkingLevel,
-		systemPrompt:    opts.SystemPrompt,
-		getAPIKey:       opts.GetAPIKey,
-		settings:        cloneSettings(opts.Settings),
-		settingsManager: opts.SettingsManager,
-		extensions:      opts.Extensions,
-		hooksPath:       opts.HooksPath,
-		tools:           opts.Tools,
-		promptTemplates: opts.PromptTemplates,
-		skills:          opts.Skills,
-		promptPaths:     append([]string(nil), opts.PromptPaths...),
-		skillPaths:      append([]string(nil), opts.SkillPaths...),
-		agentDir:        opts.AgentDir,
-		contextFiles:    opts.ContextFiles,
-		diagnostics:     append([]resource.ResourceDiagnostic(nil), opts.Diagnostics...),
-		executionEnv:    opts.ExecutionEnv,
-		recoverState:    true,
+		model:              opts.Model,
+		modelID:            opts.ModelID,
+		modelProvider:      opts.ModelProvider,
+		provider:           opts.Provider,
+		repo:               opts.Repo,
+		thinkingLevel:      opts.ThinkingLevel,
+		systemPrompt:       opts.SystemPrompt,
+		appendSystemPrompt: opts.AppendSystemPrompt,
+		getAPIKey:          opts.GetAPIKey,
+		settings:           cloneSettings(opts.Settings),
+		settingsManager:    opts.SettingsManager,
+		extensions:         opts.Extensions,
+		hooksPath:          opts.HooksPath,
+		tools:              opts.Tools,
+		promptTemplates:    opts.PromptTemplates,
+		skills:             opts.Skills,
+		promptPaths:        append([]string(nil), opts.PromptPaths...),
+		skillPaths:         append([]string(nil), opts.SkillPaths...),
+		agentDir:           opts.AgentDir,
+		contextFiles:       opts.ContextFiles,
+		diagnostics:        append([]resource.ResourceDiagnostic(nil), opts.Diagnostics...),
+		executionEnv:       opts.ExecutionEnv,
+		recoverState:       true,
 	}
 	return assemble(ctx, s, cfg)
 }
@@ -298,6 +302,11 @@ func assemble(ctx context.Context, s harness.Session, cfg runtimeConfig) (*Orche
 	baseProvider := prov.CloneBase()
 	modelID := cfg.modelID
 	modelProvider := cfg.model.Provider
+	// An explicit CLI provider hint (--provider) wins over the model's recorded
+	// provider so an ambiguous model id resolves under the requested provider.
+	if cfg.modelProvider != "" {
+		modelProvider = cfg.modelProvider
+	}
 	if modelID == "" {
 		modelID = cfg.model.ID
 	}
@@ -643,13 +652,14 @@ func buildSystemPrompt(
 	defs []extension.ToolDefinition,
 ) (string, hook.SystemPromptOptions) {
 	opts := resource.SystemPromptOptions{
-		CustomPrompt: cfg.systemPrompt,
-		CWD:          cwd,
-		Tools:        toolInfos(defs),
-		ContextFiles: cfg.contextFiles,
-		Skills:       cfg.skills,
-		Guidelines:   toolGuidelines(defs),
-		HasReadTool:  hasTool(defs, "read"),
+		CustomPrompt:       cfg.systemPrompt,
+		AppendSystemPrompt: cfg.appendSystemPrompt,
+		CWD:                cwd,
+		Tools:              toolInfos(defs),
+		ContextFiles:       cfg.contextFiles,
+		Skills:             cfg.skills,
+		Guidelines:         toolGuidelines(defs),
+		HasReadTool:        hasTool(defs, "read"),
 	}
 	return resource.BuildSystemPrompt(opts), hookSystemPromptOptions(opts)
 }
