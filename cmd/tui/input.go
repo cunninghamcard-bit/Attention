@@ -215,11 +215,24 @@ func (im *InputModel) AllCommandNames() []string {
 // Cursor returns the real Bubble Tea cursor for the input's current position.
 func (im *InputModel) Cursor() *tea.Cursor {
 	im.ensureInput()
-	return im.input.Cursor()
+	cursor := im.input.Cursor()
+	if cursor == nil {
+		return nil
+	}
+	promptWidth := lipgloss.Width(im.input.Prompt)
+	beforeCursor := im.Text[:charOffsetToByteOffset(im.Text, im.CursorPos)]
+	cursor.X = promptWidth + lipgloss.Width(beforeCursor)
+	if width := im.input.Width(); width > 0 && cursor.X > promptWidth+width {
+		cursor.X = promptWidth + width
+	}
+	return cursor
 }
 
 func (im *InputModel) ensureInput() {
-	if im.input.KeyMap.CharacterForward.Keys() == nil {
+	// Check if the textinput has been initialized by examining the prompt.
+	// Using KeyMap.CharacterForward.Keys() == nil as a heuristic is fragile
+	// because it depends on the zero value of key.Binding.Keys().
+	if im.input.Prompt == "" {
 		im.input = textinput.New()
 		promptStyle := lipgloss.NewStyle().
 			Foreground(lipgloss.Color("39")).
@@ -315,8 +328,27 @@ func isUserInput(s string) bool {
 	// Real keystrokes produce exactly one rune. Multi-char text in a
 	// KeyPressMsg is always terminal response garbage. Actual multi-char
 	// input (paste) arrives via PasteMsg which is filtered separately.
-	if utf8.RuneCountInString(s) > 1 {
+	// NB: Some keyboard layouts or IMEs may produce multi-rune key events
+	// (e.g. CJK IME composition, decomposed Unicode). These are still valid
+	// user input even though they have >1 rune.
+	if utf8.RuneCountInString(s) > 1 && !isCJKInput(s) {
 		return false
+	}
+	return true
+}
+
+// isCJKInput returns true if the string appears to be CJK text from an IME.
+// CJK IMEs may produce multi-rune key events during composition; these are
+// valid user input and should not be treated as terminal response garbage.
+func isCJKInput(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if !unicode.Is(unicode.Han, r) && !unicode.Is(unicode.Hiragana, r) &&
+			!unicode.Is(unicode.Katakana, r) && !unicode.Is(unicode.Hangul, r) {
+			return false
+		}
 	}
 	return true
 }
