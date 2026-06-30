@@ -27,8 +27,31 @@ type pluginManifest struct {
 	Description string `json:"description,omitempty"`
 }
 
+const (
+	settingsPluginsKey   = "plugins"
+	userPluginDirName    = "plugins"
+	builtInPluginDir     = "extension"
+	attentionManifestDir = ".attention-plugin"
+	claudeManifestDir    = ".claude-plugin"
+	manifestFileName     = "plugin.json"
+	sourcePathPrefix     = "plugin:"
+	binDirName           = "bin"
+	hooksDirName         = "hooks"
+	hooksFileName        = "hooks.json"
+	skillsDirName        = "skills"
+	commandsDirName      = "commands"
+
+	attentionPluginRootEnv = "ATTENTION_PLUGIN_ROOT"
+	attentionProjectDirEnv = "ATTENTION_PROJECT_DIR"
+	claudePluginRootEnv    = "CLAUDE_PLUGIN_ROOT"
+	claudeProjectDirEnv    = "CLAUDE_PROJECT_DIR"
+	pathEnv                = "PATH"
+)
+
+var manifestDirs = []string{attentionManifestDir, claudeManifestDir}
+
 func Load(settings config.Settings, agentDir string, cwd string) Result {
-	names := settingsStringSlice(settings, "plugins")
+	names := settingsStringSlice(settings, settingsPluginsKey)
 	result := Result{
 		Sources:     []internalextension.Source{},
 		BinDirs:     []string{},
@@ -56,15 +79,15 @@ func loadOne(name string, agentDir string, cwd string) Result {
 		manifest.Name = filepath.Base(root)
 	}
 
-	binDirs := existingDirs(filepath.Join(root, "bin"))
+	binDirs := existingDirs(filepath.Join(root, binDirName))
 	env := pluginEnv(root, cwd, binDirs)
 	hooks, hookDiagnostics := loadPluginHooks(root, env)
-	skillDirs := existingDirs(filepath.Join(root, "skills"))
-	commandDirs := existingDirs(filepath.Join(root, "commands"))
+	skillDirs := existingDirs(filepath.Join(root, skillsDirName))
+	commandDirs := existingDirs(filepath.Join(root, commandsDirName))
 	diagnostics := hookDiagnostics
 
 	source := internalextension.Source{
-		Path: "plugin:" + manifest.Name,
+		Path: sourcePathPrefix + manifest.Name,
 		Factory: func(api internalextension.ExtensionAPI) error {
 			if hooks != nil {
 				for _, handler := range hooks.Handlers() {
@@ -104,17 +127,17 @@ func pluginRoot(name string, agentDir string) (string, error) {
 	}
 	for _, dir := range pluginSearchDirs(agentDir) {
 		root := filepath.Join(dir, name)
-		if _, err := os.Stat(filepath.Join(root, ".claude-plugin", "plugin.json")); err == nil {
+		if manifestExists(root) {
 			return root, nil
 		}
 	}
-	return filepath.Join(agentDir, "plugins", name), nil
+	return filepath.Join(agentDir, userPluginDirName, name), nil
 }
 
 var bundledPluginDirs = defaultBundledPluginDirs
 
 func pluginSearchDirs(agentDir string) []string {
-	dirs := []string{filepath.Join(agentDir, "plugins")}
+	dirs := []string{filepath.Join(agentDir, userPluginDirName)}
 	for _, dir := range bundledPluginDirs() {
 		if strings.TrimSpace(dir) != "" {
 			dirs = append(dirs, dir)
@@ -128,13 +151,13 @@ func defaultBundledPluginDirs() []string {
 	if exe, err := os.Executable(); err == nil {
 		exeDir := filepath.Dir(exe)
 		dirs = append(dirs,
-			filepath.Join(exeDir, "extension"),
-			filepath.Join(exeDir, "..", "extension"),
+			filepath.Join(exeDir, builtInPluginDir),
+			filepath.Join(exeDir, "..", builtInPluginDir),
 		)
 	}
 	if _, file, _, ok := runtime.Caller(0); ok {
 		repoRoot := filepath.Dir(filepath.Dir(filepath.Dir(file)))
-		dirs = append(dirs, filepath.Join(repoRoot, "extension"))
+		dirs = append(dirs, filepath.Join(repoRoot, builtInPluginDir))
 	}
 	return dirs
 }
@@ -153,7 +176,10 @@ func uniqueCleanDirs(dirs []string) []string {
 }
 
 func readManifest(root string) (pluginManifest, error) {
-	path := filepath.Join(root, ".claude-plugin", "plugin.json")
+	path, ok := findManifest(root)
+	if !ok {
+		return pluginManifest{}, fmt.Errorf("read plugin manifest: no %s or %s", manifestPath(root, attentionManifestDir), manifestPath(root, claudeManifestDir))
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return pluginManifest{}, fmt.Errorf("read plugin manifest: %w", err)
@@ -165,8 +191,27 @@ func readManifest(root string) (pluginManifest, error) {
 	return manifest, nil
 }
 
+func manifestExists(root string) bool {
+	_, ok := findManifest(root)
+	return ok
+}
+
+func findManifest(root string) (string, bool) {
+	for _, dir := range manifestDirs {
+		path := manifestPath(root, dir)
+		if _, err := os.Stat(path); err == nil {
+			return path, true
+		}
+	}
+	return "", false
+}
+
+func manifestPath(root string, dir string) string {
+	return filepath.Join(root, dir, manifestFileName)
+}
+
 func loadPluginHooks(root string, env map[string]string) (*hook.ShellHooksRunner, []resource.ResourceDiagnostic) {
-	path := filepath.Join(root, "hooks", "hooks.json")
+	path := filepath.Join(root, hooksDirName, hooksFileName)
 	runner, err := hook.LoadShellHooksWithOptions(hook.ShellHooksOptions{
 		Path:        path,
 		CWD:         root,
@@ -185,17 +230,17 @@ func loadPluginHooks(root string, env map[string]string) (*hook.ShellHooksRunner
 
 func pluginEnv(root string, cwd string, binDirs []string) map[string]string {
 	env := map[string]string{
-		"ATTENTION_PLUGIN_ROOT": root,
-		"ATTENTION_PROJECT_DIR": cwd,
-		"CLAUDE_PLUGIN_ROOT":    root,
-		"CLAUDE_PROJECT_DIR":    cwd,
+		attentionPluginRootEnv: root,
+		attentionProjectDirEnv: cwd,
+		claudePluginRootEnv:    root,
+		claudeProjectDirEnv:    cwd,
 	}
 	if len(binDirs) > 0 {
 		pathParts := append([]string(nil), binDirs...)
-		if current := os.Getenv("PATH"); current != "" {
+		if current := os.Getenv(pathEnv); current != "" {
 			pathParts = append(pathParts, current)
 		}
-		env["PATH"] = strings.Join(pathParts, string(os.PathListSeparator))
+		env[pathEnv] = strings.Join(pathParts, string(os.PathListSeparator))
 	}
 	return env
 }

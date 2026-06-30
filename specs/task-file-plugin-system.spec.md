@@ -19,7 +19,8 @@ engine or compile an RTK-specific Go extension.
 - Named plugins resolve under `<agentDir>/plugins/<name>` first, then built-in
   plugin directories shipped in Attention's repository `extension/<name>`.
 - Plugin settings entries are names, not arbitrary filesystem paths.
-- A plugin root must contain `.claude-plugin/plugin.json`.
+- A plugin root must contain `.attention-plugin/plugin.json`.
+- `.claude-plugin/plugin.json` is accepted as a compatibility manifest.
 - `hooks/hooks.json` supports grouped hook JSON and Attention's legacy array form.
 - Plugin hooks receive plugin hook stdin when loaded from a plugin.
 - `hookSpecificOutput.updatedInput` mutates `PreToolUse` input.
@@ -58,7 +59,7 @@ engine or compile an RTK-specific Go extension.
 Scenario: file plugin source resolves from settings
   Test: TestLoadFilePluginSourcesHooksBinAndResources
   Given settings include plugin "rtk-optimizer"
-  And `<agentDir>/plugins/rtk-optimizer/.claude-plugin/plugin.json` exists
+  And `<agentDir>/plugins/rtk-optimizer/.attention-plugin/plugin.json` exists
   When the file plugin loader resolves settings
   Then it returns source path "plugin:rtk-optimizer"
   And it returns the plugin `bin/` directory
@@ -116,7 +117,7 @@ Scenario: bundled plugin source resolves from settings
   Test: TestLoadBundledFilePluginFallback
   Given settings include plugin "rtk-optimizer"
   And no user plugin exists at `<agentDir>/plugins/rtk-optimizer`
-  And built-in plugin `extension/rtk-optimizer/.claude-plugin/plugin.json` exists
+  And built-in plugin `extension/rtk-optimizer/.attention-plugin/plugin.json` exists
   When the file plugin loader resolves settings
   Then it returns the bundled plugin source
   And it returns the bundled plugin `bin/` directory

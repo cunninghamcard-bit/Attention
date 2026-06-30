@@ -15,11 +15,11 @@ import (
 func TestLoadFilePluginSourcesHooksBinAndResources(t *testing.T) {
 	agentDir := t.TempDir()
 	cwd := t.TempDir()
-	root := filepath.Join(agentDir, "plugins", "rtk-optimizer")
+	root := filepath.Join(agentDir, userPluginDirName, "rtk-optimizer")
 	writePluginFixture(t, root)
 
 	result := Load(config.Settings{
-		"plugins": []any{"rtk-optimizer"},
+		settingsPluginsKey: []any{"rtk-optimizer"},
 	}, agentDir, cwd)
 	if len(result.Diagnostics) != 0 {
 		t.Fatalf("diagnostics = %#v, want none", result.Diagnostics)
@@ -27,10 +27,10 @@ func TestLoadFilePluginSourcesHooksBinAndResources(t *testing.T) {
 	if len(result.Sources) != 1 {
 		t.Fatalf("sources = %d, want 1", len(result.Sources))
 	}
-	if result.Sources[0].Path != "plugin:rtk-optimizer" || result.Sources[0].Factory == nil {
+	if result.Sources[0].Path != sourcePathPrefix+"rtk-optimizer" || result.Sources[0].Factory == nil {
 		t.Fatalf("source = %#v, want plugin source", result.Sources[0])
 	}
-	if len(result.BinDirs) != 1 || result.BinDirs[0] != filepath.Join(root, "bin") {
+	if len(result.BinDirs) != 1 || result.BinDirs[0] != filepath.Join(root, binDirName) {
 		t.Fatalf("bin dirs = %#v, want plugin bin", result.BinDirs)
 	}
 
@@ -64,10 +64,10 @@ func TestLoadFilePluginSourcesHooksBinAndResources(t *testing.T) {
 		t.Fatalf("Emit resources_discover: %v", err)
 	}
 	discovered := resources.(hook.ResourcesDiscoverResult)
-	if len(discovered.SkillPaths) != 1 || discovered.SkillPaths[0] != filepath.Join(root, "skills") {
+	if len(discovered.SkillPaths) != 1 || discovered.SkillPaths[0] != filepath.Join(root, skillsDirName) {
 		t.Fatalf("SkillPaths = %#v, want plugin skills", discovered.SkillPaths)
 	}
-	if len(discovered.PromptPaths) != 1 || discovered.PromptPaths[0] != filepath.Join(root, "commands") {
+	if len(discovered.PromptPaths) != 1 || discovered.PromptPaths[0] != filepath.Join(root, commandsDirName) {
 		t.Fatalf("PromptPaths = %#v, want plugin commands", discovered.PromptPaths)
 	}
 }
@@ -81,7 +81,7 @@ func TestLoadBundledFilePluginFallback(t *testing.T) {
 	withBundledPluginDirs(t, bundledDir)
 
 	result := Load(config.Settings{
-		"plugins": []any{"rtk-optimizer"},
+		settingsPluginsKey: []any{"rtk-optimizer"},
 	}, agentDir, cwd)
 	if len(result.Diagnostics) != 0 {
 		t.Fatalf("diagnostics = %#v, want none", result.Diagnostics)
@@ -89,7 +89,7 @@ func TestLoadBundledFilePluginFallback(t *testing.T) {
 	if len(result.Sources) != 1 {
 		t.Fatalf("sources = %d, want 1", len(result.Sources))
 	}
-	if len(result.BinDirs) != 1 || result.BinDirs[0] != filepath.Join(root, "bin") {
+	if len(result.BinDirs) != 1 || result.BinDirs[0] != filepath.Join(root, binDirName) {
 		t.Fatalf("bin dirs = %#v, want bundled plugin bin", result.BinDirs)
 	}
 }
@@ -98,16 +98,16 @@ func TestLoadAgentPluginOverridesBundledPlugin(t *testing.T) {
 	agentDir := t.TempDir()
 	cwd := t.TempDir()
 	bundledDir := t.TempDir()
-	agentRoot := filepath.Join(agentDir, "plugins", "rtk-optimizer")
+	agentRoot := filepath.Join(agentDir, userPluginDirName, "rtk-optimizer")
 	writePluginFixture(t, agentRoot)
 	writePluginFixture(t, filepath.Join(bundledDir, "rtk-optimizer"))
 	withBundledPluginDirs(t, bundledDir)
 
-	result := Load(config.Settings{"plugins": []string{"rtk-optimizer"}}, agentDir, cwd)
+	result := Load(config.Settings{settingsPluginsKey: []string{"rtk-optimizer"}}, agentDir, cwd)
 	if len(result.Diagnostics) != 0 {
 		t.Fatalf("diagnostics = %#v, want none", result.Diagnostics)
 	}
-	if len(result.BinDirs) != 1 || result.BinDirs[0] != filepath.Join(agentRoot, "bin") {
+	if len(result.BinDirs) != 1 || result.BinDirs[0] != filepath.Join(agentRoot, binDirName) {
 		t.Fatalf("bin dirs = %#v, want agent plugin bin", result.BinDirs)
 	}
 }
@@ -116,20 +116,36 @@ func TestLoadRepositoryBuiltInRtkOptimizer(t *testing.T) {
 	agentDir := t.TempDir()
 	cwd := t.TempDir()
 
-	result := Load(config.Settings{"plugins": []string{"rtk-optimizer"}}, agentDir, cwd)
+	result := Load(config.Settings{settingsPluginsKey: []string{"rtk-optimizer"}}, agentDir, cwd)
 	if len(result.Diagnostics) != 0 {
 		t.Fatalf("diagnostics = %#v, want none", result.Diagnostics)
 	}
 	if len(result.Sources) != 1 {
 		t.Fatalf("sources = %d, want built-in rtk optimizer source", len(result.Sources))
 	}
-	if result.Sources[0].Path != "plugin:rtk-optimizer" {
-		t.Fatalf("source path = %q, want plugin:rtk-optimizer", result.Sources[0].Path)
+	if result.Sources[0].Path != sourcePathPrefix+"rtk-optimizer" {
+		t.Fatalf("source path = %q, want rtk optimizer plugin source", result.Sources[0].Path)
+	}
+}
+
+func TestLoadClaudeManifestForCompatibility(t *testing.T) {
+	agentDir := t.TempDir()
+	cwd := t.TempDir()
+	root := filepath.Join(agentDir, userPluginDirName, "claude-shaped")
+	mustMkdir(t, filepath.Join(root, claudeManifestDir))
+	mustWrite(t, filepath.Join(root, claudeManifestDir, manifestFileName), `{"name":"claude-shaped"}`)
+
+	result := Load(config.Settings{settingsPluginsKey: []string{"claude-shaped"}}, agentDir, cwd)
+	if len(result.Diagnostics) != 0 {
+		t.Fatalf("diagnostics = %#v, want none", result.Diagnostics)
+	}
+	if len(result.Sources) != 1 || result.Sources[0].Path != sourcePathPrefix+"claude-shaped" {
+		t.Fatalf("sources = %#v, want claude-compatible plugin source", result.Sources)
 	}
 }
 
 func TestLoadMissingFilePluginReportsDiagnostic(t *testing.T) {
-	result := Load(config.Settings{"plugins": []string{"missing"}}, t.TempDir(), t.TempDir())
+	result := Load(config.Settings{settingsPluginsKey: []string{"missing"}}, t.TempDir(), t.TempDir())
 	if len(result.Sources) != 0 {
 		t.Fatalf("sources = %#v, want none", result.Sources)
 	}
@@ -141,13 +157,13 @@ func TestLoadMissingFilePluginReportsDiagnostic(t *testing.T) {
 func TestFilePluginSystemDoesNotAddTypeScriptRuntime(t *testing.T) {
 	agentDir := t.TempDir()
 	cwd := t.TempDir()
-	root := filepath.Join(agentDir, "plugins", "ts-plugin")
-	mustMkdir(t, filepath.Join(root, ".claude-plugin"))
-	mustWrite(t, filepath.Join(root, ".claude-plugin", "plugin.json"), `{"name":"ts-plugin"}`)
+	root := filepath.Join(agentDir, userPluginDirName, "ts-plugin")
+	mustMkdir(t, filepath.Join(root, attentionManifestDir))
+	mustWrite(t, filepath.Join(root, attentionManifestDir, manifestFileName), `{"name":"ts-plugin"}`)
 	mustWrite(t, filepath.Join(root, "package.json"), `{"scripts":{"postinstall":"touch should-not-run"}}`)
 	mustWrite(t, filepath.Join(root, "index.ts"), `throw new Error("should not run")`)
 
-	result := Load(config.Settings{"plugins": []string{"ts-plugin"}}, agentDir, cwd)
+	result := Load(config.Settings{settingsPluginsKey: []string{"ts-plugin"}}, agentDir, cwd)
 	if len(result.Sources) != 1 {
 		t.Fatalf("sources = %#v, want plugin source", result.Sources)
 	}
@@ -157,7 +173,7 @@ func TestFilePluginSystemDoesNotAddTypeScriptRuntime(t *testing.T) {
 }
 
 func TestLoadRejectsPluginPathSetting(t *testing.T) {
-	result := Load(config.Settings{"plugins": []string{"./plugin"}}, t.TempDir(), t.TempDir())
+	result := Load(config.Settings{settingsPluginsKey: []string{"./plugin"}}, t.TempDir(), t.TempDir())
 	if len(result.Sources) != 0 {
 		t.Fatalf("sources = %#v, want none", result.Sources)
 	}
@@ -168,13 +184,13 @@ func TestLoadRejectsPluginPathSetting(t *testing.T) {
 
 func writePluginFixture(t *testing.T, root string) {
 	t.Helper()
-	mustMkdir(t, filepath.Join(root, ".claude-plugin"))
-	mustMkdir(t, filepath.Join(root, "hooks"))
-	mustMkdir(t, filepath.Join(root, "bin"))
-	mustMkdir(t, filepath.Join(root, "skills"))
-	mustMkdir(t, filepath.Join(root, "commands"))
-	mustWrite(t, filepath.Join(root, ".claude-plugin", "plugin.json"), `{"name":"rtk-optimizer","version":"1.0.0"}`)
-	mustWrite(t, filepath.Join(root, "hooks", "hooks.json"), `{
+	mustMkdir(t, filepath.Join(root, attentionManifestDir))
+	mustMkdir(t, filepath.Join(root, hooksDirName))
+	mustMkdir(t, filepath.Join(root, binDirName))
+	mustMkdir(t, filepath.Join(root, skillsDirName))
+	mustMkdir(t, filepath.Join(root, commandsDirName))
+	mustWrite(t, filepath.Join(root, attentionManifestDir, manifestFileName), `{"name":"rtk-optimizer","version":"1.0.0"}`)
+	mustWrite(t, filepath.Join(root, hooksDirName, hooksFileName), `{
   "hooks": {
     "PreToolUse": [
       {
@@ -184,11 +200,11 @@ func writePluginFixture(t *testing.T, root string) {
     ]
   }
 }`)
-	mustWrite(t, filepath.Join(root, "bin", "rewrite-hook"), `#!/bin/sh
+	mustWrite(t, filepath.Join(root, binDirName, "rewrite-hook"), `#!/bin/sh
 cat >/dev/null
 echo '{"hookSpecificOutput":{"hookEventName":"PreToolUse","updatedInput":{"command":"rtk npm test"}}}'
 `)
-	if err := os.Chmod(filepath.Join(root, "bin", "rewrite-hook"), 0o755); err != nil {
+	if err := os.Chmod(filepath.Join(root, binDirName, "rewrite-hook"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 }
