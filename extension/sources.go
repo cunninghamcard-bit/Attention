@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/cunninghamcard-bit/Attention/internal/config"
@@ -101,7 +102,54 @@ func pluginRoot(name string, agentDir string) (string, error) {
 	if agentDir == "" {
 		return "", fmt.Errorf("agent dir is empty")
 	}
+	for _, dir := range pluginSearchDirs(agentDir) {
+		root := filepath.Join(dir, name)
+		if _, err := os.Stat(filepath.Join(root, ".claude-plugin", "plugin.json")); err == nil {
+			return root, nil
+		}
+	}
 	return filepath.Join(agentDir, "plugins", name), nil
+}
+
+var bundledPluginDirs = defaultBundledPluginDirs
+
+func pluginSearchDirs(agentDir string) []string {
+	dirs := []string{filepath.Join(agentDir, "plugins")}
+	for _, dir := range bundledPluginDirs() {
+		if strings.TrimSpace(dir) != "" {
+			dirs = append(dirs, dir)
+		}
+	}
+	return uniqueCleanDirs(dirs)
+}
+
+func defaultBundledPluginDirs() []string {
+	dirs := []string{}
+	if exe, err := os.Executable(); err == nil {
+		exeDir := filepath.Dir(exe)
+		dirs = append(dirs,
+			filepath.Join(exeDir, "plugins"),
+			filepath.Join(exeDir, "..", "plugins"),
+		)
+	}
+	if _, file, _, ok := runtime.Caller(0); ok {
+		repoRoot := filepath.Dir(filepath.Dir(file))
+		dirs = append(dirs, filepath.Join(repoRoot, "plugins"))
+	}
+	return dirs
+}
+
+func uniqueCleanDirs(dirs []string) []string {
+	out := []string{}
+	seen := map[string]bool{}
+	for _, dir := range dirs {
+		clean := filepath.Clean(dir)
+		if !seen[clean] {
+			out = append(out, clean)
+			seen[clean] = true
+		}
+	}
+	return out
 }
 
 func readManifest(root string) (pluginManifest, error) {

@@ -72,6 +72,46 @@ func TestLoadFilePluginSourcesHooksBinAndResources(t *testing.T) {
 	}
 }
 
+func TestLoadBundledFilePluginFallback(t *testing.T) {
+	agentDir := t.TempDir()
+	cwd := t.TempDir()
+	bundledDir := t.TempDir()
+	root := filepath.Join(bundledDir, "rtk-optimizer")
+	writePluginFixture(t, root)
+	withBundledPluginDirs(t, bundledDir)
+
+	result := Load(config.Settings{
+		"plugins": []any{"rtk-optimizer"},
+	}, agentDir, cwd)
+	if len(result.Diagnostics) != 0 {
+		t.Fatalf("diagnostics = %#v, want none", result.Diagnostics)
+	}
+	if len(result.Sources) != 1 {
+		t.Fatalf("sources = %d, want 1", len(result.Sources))
+	}
+	if len(result.BinDirs) != 1 || result.BinDirs[0] != filepath.Join(root, "bin") {
+		t.Fatalf("bin dirs = %#v, want bundled plugin bin", result.BinDirs)
+	}
+}
+
+func TestLoadAgentPluginOverridesBundledPlugin(t *testing.T) {
+	agentDir := t.TempDir()
+	cwd := t.TempDir()
+	bundledDir := t.TempDir()
+	agentRoot := filepath.Join(agentDir, "plugins", "rtk-optimizer")
+	writePluginFixture(t, agentRoot)
+	writePluginFixture(t, filepath.Join(bundledDir, "rtk-optimizer"))
+	withBundledPluginDirs(t, bundledDir)
+
+	result := Load(config.Settings{"plugins": []string{"rtk-optimizer"}}, agentDir, cwd)
+	if len(result.Diagnostics) != 0 {
+		t.Fatalf("diagnostics = %#v, want none", result.Diagnostics)
+	}
+	if len(result.BinDirs) != 1 || result.BinDirs[0] != filepath.Join(agentRoot, "bin") {
+		t.Fatalf("bin dirs = %#v, want agent plugin bin", result.BinDirs)
+	}
+}
+
 func TestLoadMissingFilePluginReportsDiagnostic(t *testing.T) {
 	result := Load(config.Settings{"plugins": []string{"missing"}}, t.TempDir(), t.TempDir())
 	if len(result.Sources) != 0 {
@@ -149,4 +189,15 @@ func mustWrite(t *testing.T, path string, content string) {
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func withBundledPluginDirs(t *testing.T, dirs ...string) {
+	t.Helper()
+	old := bundledPluginDirs
+	bundledPluginDirs = func() []string {
+		return append([]string(nil), dirs...)
+	}
+	t.Cleanup(func() {
+		bundledPluginDirs = old
+	})
 }

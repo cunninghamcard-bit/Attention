@@ -16,7 +16,8 @@ engine or compile an RTK-specific Go extension.
 ## Decisions
 
 - Enabled plugin names come from settings key `plugins`.
-- Named plugins resolve under `<agentDir>/plugins/<name>`.
+- Named plugins resolve under `<agentDir>/plugins/<name>` first, then bundled
+  plugin directories shipped with Attention.
 - Plugin settings entries are names, not arbitrary filesystem paths.
 - A plugin root must contain `.claude-plugin/plugin.json`.
 - `hooks/hooks.json` supports grouped hook JSON and Attention's legacy array form.
@@ -110,3 +111,20 @@ Scenario: missing plugin reports a diagnostic
   When the file plugin loader resolves settings
   Then no source is returned
   And an error diagnostic identifies the missing plugin
+
+Scenario: bundled plugin source resolves from settings
+  Test: TestLoadBundledFilePluginFallback
+  Given settings include plugin "rtk-optimizer"
+  And no user plugin exists at `<agentDir>/plugins/rtk-optimizer`
+  And bundled plugin `plugins/rtk-optimizer/.claude-plugin/plugin.json` exists
+  When the file plugin loader resolves settings
+  Then it returns the bundled plugin source
+  And it returns the bundled plugin `bin/` directory
+
+Scenario: user plugin overrides bundled plugin
+  Test: TestLoadAgentPluginOverridesBundledPlugin
+  Given settings include plugin "rtk-optimizer"
+  And both user and bundled plugin directories exist
+  When the file plugin loader resolves settings
+  Then it loads `<agentDir>/plugins/rtk-optimizer`
+  And ignores the bundled plugin of the same name

@@ -34,6 +34,20 @@ go build -o along ./cmd/along
 go test ./...
 ```
 
+## Built-in plugins
+
+Attention ships repository plugins from `plugins/<name>`. Enable one by name in
+settings, for example:
+
+```json
+{
+  "plugins": ["rtk-optimizer"]
+}
+```
+
+User plugins at `<agentDir>/plugins/<name>` override bundled plugins with the
+same name.
+
 Known test failures (all pre-existing at `a4702cc`, none are code regressions):
 - `internal/execenv/local` and `internal/resource` — macOS-only env quirks
   (symlinked `/var`, case-insensitive FS).
