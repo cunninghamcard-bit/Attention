@@ -6,7 +6,7 @@ tags: [phase-3, plugin, extension, hooks]
 
 ## Intent
 
-Load Pi/Claude-shaped plugins from Attention-managed plugin directories. A
+Load Attention-managed plugins from Attention-managed plugin directories. A
 plugin should be able to provide JSON-configured hooks, executable `bin/`
 entries, skills, and slash-command prompt templates without being rewritten as a
 Go module.
@@ -20,7 +20,6 @@ engine or compile an RTK-specific Go extension.
   plugin directories shipped in Attention's repository `extension/<name>`.
 - Plugin settings entries are names, not arbitrary filesystem paths.
 - A plugin root must contain `.attention-plugin/plugin.json`.
-- `.claude-plugin/plugin.json` is accepted as a compatibility manifest.
 - `hooks/hooks.json` supports grouped hook JSON and Attention's legacy array form.
 - Plugin hooks receive plugin hook stdin when loaded from a plugin.
 - `hookSpecificOutput.updatedInput` mutates `PreToolUse` input.

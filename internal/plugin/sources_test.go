@@ -128,22 +128,6 @@ func TestLoadRepositoryBuiltInRtkOptimizer(t *testing.T) {
 	}
 }
 
-func TestLoadClaudeManifestForCompatibility(t *testing.T) {
-	agentDir := t.TempDir()
-	cwd := t.TempDir()
-	root := filepath.Join(agentDir, userPluginDirName, "claude-shaped")
-	mustMkdir(t, filepath.Join(root, claudeManifestDir))
-	mustWrite(t, filepath.Join(root, claudeManifestDir, manifestFileName), `{"name":"claude-shaped"}`)
-
-	result := Load(config.Settings{settingsPluginsKey: []string{"claude-shaped"}}, agentDir, cwd)
-	if len(result.Diagnostics) != 0 {
-		t.Fatalf("diagnostics = %#v, want none", result.Diagnostics)
-	}
-	if len(result.Sources) != 1 || result.Sources[0].Path != sourcePathPrefix+"claude-shaped" {
-		t.Fatalf("sources = %#v, want claude-compatible plugin source", result.Sources)
-	}
-}
-
 func TestLoadMissingFilePluginReportsDiagnostic(t *testing.T) {
 	result := Load(config.Settings{settingsPluginsKey: []string{"missing"}}, t.TempDir(), t.TempDir())
 	if len(result.Sources) != 0 {
@@ -158,8 +142,8 @@ func TestFilePluginSystemDoesNotAddTypeScriptRuntime(t *testing.T) {
 	agentDir := t.TempDir()
 	cwd := t.TempDir()
 	root := filepath.Join(agentDir, userPluginDirName, "ts-plugin")
-	mustMkdir(t, filepath.Join(root, attentionManifestDir))
-	mustWrite(t, filepath.Join(root, attentionManifestDir, manifestFileName), `{"name":"ts-plugin"}`)
+	mustMkdir(t, filepath.Join(root, manifestDir))
+	mustWrite(t, filepath.Join(root, manifestDir, manifestFileName), `{"name":"ts-plugin"}`)
 	mustWrite(t, filepath.Join(root, "package.json"), `{"scripts":{"postinstall":"touch should-not-run"}}`)
 	mustWrite(t, filepath.Join(root, "index.ts"), `throw new Error("should not run")`)
 
@@ -184,12 +168,12 @@ func TestLoadRejectsPluginPathSetting(t *testing.T) {
 
 func writePluginFixture(t *testing.T, root string) {
 	t.Helper()
-	mustMkdir(t, filepath.Join(root, attentionManifestDir))
+	mustMkdir(t, filepath.Join(root, manifestDir))
 	mustMkdir(t, filepath.Join(root, hooksDirName))
 	mustMkdir(t, filepath.Join(root, binDirName))
 	mustMkdir(t, filepath.Join(root, skillsDirName))
 	mustMkdir(t, filepath.Join(root, commandsDirName))
-	mustWrite(t, filepath.Join(root, attentionManifestDir, manifestFileName), `{"name":"rtk-optimizer","version":"1.0.0"}`)
+	mustWrite(t, filepath.Join(root, manifestDir, manifestFileName), `{"name":"rtk-optimizer","version":"1.0.0"}`)
 	mustWrite(t, filepath.Join(root, hooksDirName, hooksFileName), `{
   "hooks": {
     "PreToolUse": [

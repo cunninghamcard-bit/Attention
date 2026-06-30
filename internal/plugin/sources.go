@@ -31,8 +31,7 @@ const (
 	settingsPluginsKey   = "plugins"
 	userPluginDirName    = "plugins"
 	builtInPluginDir     = "extension"
-	attentionManifestDir = ".attention-plugin"
-	claudeManifestDir    = ".claude-plugin"
+	manifestDir = ".attention-plugin"
 	manifestFileName     = "plugin.json"
 	sourcePathPrefix     = "plugin:"
 	binDirName           = "bin"
@@ -41,14 +40,12 @@ const (
 	skillsDirName        = "skills"
 	commandsDirName      = "commands"
 
-	attentionPluginRootEnv = "ATTENTION_PLUGIN_ROOT"
-	attentionProjectDirEnv = "ATTENTION_PROJECT_DIR"
-	claudePluginRootEnv    = "CLAUDE_PLUGIN_ROOT"
-	claudeProjectDirEnv    = "CLAUDE_PROJECT_DIR"
+	pluginRootEnv = "ATTENTION_PLUGIN_ROOT"
+	projectDirEnv = "ATTENTION_PROJECT_DIR"
 	pathEnv                = "PATH"
 )
 
-var manifestDirs = []string{attentionManifestDir, claudeManifestDir}
+var manifestDirs = []string{manifestDir}
 
 func Load(settings config.Settings, agentDir string, cwd string) Result {
 	names := settingsStringSlice(settings, settingsPluginsKey)
@@ -178,7 +175,7 @@ func uniqueCleanDirs(dirs []string) []string {
 func readManifest(root string) (pluginManifest, error) {
 	path, ok := findManifest(root)
 	if !ok {
-		return pluginManifest{}, fmt.Errorf("read plugin manifest: no %s or %s", manifestPath(root, attentionManifestDir), manifestPath(root, claudeManifestDir))
+		return pluginManifest{}, fmt.Errorf("read plugin manifest: no %s", manifestPath(root, manifestDir))
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -230,10 +227,8 @@ func loadPluginHooks(root string, env map[string]string) (*hook.ShellHooksRunner
 
 func pluginEnv(root string, cwd string, binDirs []string) map[string]string {
 	env := map[string]string{
-		attentionPluginRootEnv: root,
-		attentionProjectDirEnv: cwd,
-		claudePluginRootEnv:    root,
-		claudeProjectDirEnv:    cwd,
+		pluginRootEnv: root,
+		projectDirEnv: cwd,
 	}
 	if len(binDirs) > 0 {
 		pathParts := append([]string(nil), binDirs...)
