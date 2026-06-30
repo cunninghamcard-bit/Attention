@@ -28,24 +28,22 @@ type pluginManifest struct {
 }
 
 const (
-	settingsPluginsKey   = "plugins"
-	userPluginDirName    = "plugins"
-	builtInPluginDir     = "extension"
-	manifestDir = ".attention-plugin"
-	manifestFileName     = "plugin.json"
-	sourcePathPrefix     = "plugin:"
-	binDirName           = "bin"
-	hooksDirName         = "hooks"
-	hooksFileName        = "hooks.json"
-	skillsDirName        = "skills"
-	commandsDirName      = "commands"
+	settingsPluginsKey = "plugins"
+	userPluginDirName  = "plugins"
+	builtInPluginDir   = "extension"
+	manifestDir        = ".attention-plugin"
+	manifestFileName   = "plugin.json"
+	sourcePathPrefix   = "plugin:"
+	binDirName         = "bin"
+	hooksDirName       = "hooks"
+	hooksFileName      = "hooks.json"
+	skillsDirName      = "skills"
+	commandsDirName    = "commands"
 
 	pluginRootEnv = "ATTENTION_PLUGIN_ROOT"
 	projectDirEnv = "ATTENTION_PROJECT_DIR"
-	pathEnv                = "PATH"
+	pathEnv       = "PATH"
 )
-
-var manifestDirs = []string{manifestDir}
 
 func Load(settings config.Settings, agentDir string, cwd string) Result {
 	names := settingsStringSlice(settings, settingsPluginsKey)
@@ -173,9 +171,9 @@ func uniqueCleanDirs(dirs []string) []string {
 }
 
 func readManifest(root string) (pluginManifest, error) {
-	path, ok := findManifest(root)
-	if !ok {
-		return pluginManifest{}, fmt.Errorf("read plugin manifest: no %s", manifestPath(root, manifestDir))
+	path := manifestPath(root, manifestDir)
+	if _, err := os.Stat(path); err != nil {
+		return pluginManifest{}, fmt.Errorf("read plugin manifest: no %s", path)
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -189,18 +187,9 @@ func readManifest(root string) (pluginManifest, error) {
 }
 
 func manifestExists(root string) bool {
-	_, ok := findManifest(root)
-	return ok
-}
-
-func findManifest(root string) (string, bool) {
-	for _, dir := range manifestDirs {
-		path := manifestPath(root, dir)
-		if _, err := os.Stat(path); err == nil {
-			return path, true
-		}
-	}
-	return "", false
+	path := manifestPath(root, manifestDir)
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 func manifestPath(root string, dir string) string {
