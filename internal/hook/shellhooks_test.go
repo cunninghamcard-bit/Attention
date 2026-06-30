@@ -292,6 +292,121 @@ func TestShellHooksPostToolUsePatch(t *testing.T) {
 	}
 }
 
+func TestShellHooksPluginPostToolUseUpdatedToolOutput(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell hooks test requires a POSIX shell")
+	}
+	dir := t.TempDir()
+	cmd := writeScript(t, dir, "compact.sh", `echo '{"hookSpecificOutput":{"hookEventName":"PostToolUse","updatedToolOutput":"compact output"}}'`)
+	hooks := writeHooks(t, dir, `{"hooks":{"PostToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"`+cmd+`"}]}]}}`)
+
+	runner, err := LoadShellHooksWithOptions(ShellHooksOptions{
+		Path:        hooks,
+		InputFormat: ShellHookInputPlugin,
+	})
+	if err != nil {
+		t.Fatalf("LoadShellHooksWithOptions: %v", err)
+	}
+	reg := NewRegistry()
+	runner.Register(reg, "sess-1")
+
+	res, err := reg.Emit(context.Background(), ToolResultEvent{
+		Type:     EventToolResult,
+		ToolName: "bash",
+		Content:  []ai.ContentBlock{{Type: ai.ContentText, Text: "raw output"}},
+	})
+	if err != nil {
+		t.Fatalf("Emit: %v", err)
+	}
+	patch, ok := res.(ToolResultPatch)
+	if !ok {
+		t.Fatalf("result type = %T, want hook.ToolResultPatch", res)
+	}
+	if len(patch.Content) != 1 || patch.Content[0].Type != ai.ContentText || patch.Content[0].Text != "compact output" {
+		t.Fatalf("Content = %#v, want compact text block", patch.Content)
+	}
+}
+
+func TestShellHooksGroupedCommandArgs(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell hooks test requires a POSIX shell")
+	}
+	dir := t.TempDir()
+	script := filepath.Join(dir, "script with spaces.sh")
+	if err := os.WriteFile(script, []byte(`cat >/dev/null
+echo '{"hookSpecificOutput":{"hookEventName":"PreToolUse","updatedInput":{"command":"args worked"}}}'
+`), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	hooks := writeHooks(t, dir, `{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"sh","args":["`+script+`"],"timeout":8}]}]}}`)
+
+	runner, err := LoadShellHooksWithOptions(ShellHooksOptions{
+		Path:        hooks,
+		InputFormat: ShellHookInputPlugin,
+	})
+	if err != nil {
+		t.Fatalf("LoadShellHooksWithOptions: %v", err)
+	}
+	reg := NewRegistry()
+	runner.Register(reg, "sess-1")
+
+	res, err := reg.Emit(context.Background(), ToolCallEvent{
+		Type:     EventToolCall,
+		ToolName: "bash",
+		Input:    map[string]any{"command": "npm test"},
+	})
+	if err != nil {
+		t.Fatalf("Emit: %v", err)
+	}
+	toolPatch, ok := res.(ToolCallResult)
+	if !ok {
+		t.Fatalf("result type = %T, want hook.ToolCallResult", res)
+	}
+	if toolPatch.Input["command"] != "args worked" {
+		t.Fatalf("command = %#v, want args command to run", toolPatch.Input["command"])
+	}
+
+	builtinHooks := writeHooks(t, dir, `{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"eval","args":["printf '%s' '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"updatedInput\":{\"command\":\"shell builtin ran\"}}}'"]}]}]}}`)
+	builtinRunner, err := LoadShellHooksWithOptions(ShellHooksOptions{
+		Path:        builtinHooks,
+		InputFormat: ShellHookInputPlugin,
+	})
+	if err != nil {
+		t.Fatalf("LoadShellHooksWithOptions builtin: %v", err)
+	}
+	builtinReg := NewRegistry()
+	builtinRunner.Register(builtinReg, "sess-1")
+	res, err = builtinReg.Emit(context.Background(), ToolCallEvent{
+		Type:     EventToolCall,
+		ToolName: "bash",
+		Input:    map[string]any{"command": "npm test"},
+	})
+	if err != nil {
+		t.Fatalf("Emit builtin: %v", err)
+	}
+	if res != nil {
+		t.Fatalf("exec-form command ran through shell: %#v", res)
+	}
+}
+
+func TestShellHooksMatcherAlternatives(t *testing.T) {
+	if !toolNameMatches("Bash|Read", "bash") {
+		t.Fatal("Bash|Read did not match bash")
+	}
+	if !toolNameMatches("Bash,Read", "read") {
+		t.Fatal("Bash,Read did not match read")
+	}
+	if !toolNameMatches("/^(Bash|Read)$/i", "read") {
+		t.Fatal("regex matcher did not match read")
+	}
+	if toolNameMatches("Read|Grep", "bash") {
+		t.Fatal("Read|Grep matched bash")
+	}
+	if toolNameMatches("/^Read$/", "bash") {
+		t.Fatal("regex matcher matched bash")
+	}
+}
+
 func TestLoadShellHooksMissingFileIsNil(t *testing.T) {
 	runner, err := LoadShellHooks(filepath.Join(t.TempDir(), "absent.json"))
 	if err != nil {

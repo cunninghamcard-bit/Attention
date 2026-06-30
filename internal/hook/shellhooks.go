@@ -26,6 +26,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -48,10 +49,12 @@ const defaultShellHookTimeout = 30 * time.Second
 // when set, is a filepath.Match glob filtered against the event's ToolName
 // (tool_call / tool_result only); empty => all tools / all events.
 type shellHookEntry struct {
-	Event     string `json:"event"`
-	ToolName  string `json:"toolName,omitempty"`
-	Command   string `json:"command"`
-	TimeoutMs int    `json:"timeoutMs,omitempty"`
+	Event     string   `json:"event"`
+	ToolName  string   `json:"toolName,omitempty"`
+	Command   string   `json:"command"`
+	Args      []string `json:"args,omitempty"`
+	TimeoutMs int      `json:"timeoutMs,omitempty"`
+	Timeout   int      `json:"timeout,omitempty"`
 }
 
 type ShellHookInputFormat string
@@ -78,9 +81,11 @@ type groupedHookMatcher struct {
 }
 
 type groupedHookCommand struct {
-	Type      string `json:"type"`
-	Command   string `json:"command"`
-	TimeoutMs int    `json:"timeoutMs,omitempty"`
+	Type      string   `json:"type"`
+	Command   string   `json:"command"`
+	Args      []string `json:"args,omitempty"`
+	TimeoutMs int      `json:"timeoutMs,omitempty"`
+	Timeout   int      `json:"timeout,omitempty"`
 }
 
 // shellHookDecision is the JSON a hook command prints on stdout. It is a unified
@@ -163,6 +168,7 @@ type pluginHookResponse struct {
 type pluginHookSpecificOutput struct {
 	HookEventName            string          `json:"hookEventName,omitempty"`
 	UpdatedInput             map[string]any  `json:"updatedInput,omitempty"`
+	UpdatedToolOutput        json.RawMessage `json:"updatedToolOutput,omitempty"`
 	PermissionDecision       string          `json:"permissionDecision,omitempty"`
 	PermissionDecisionReason string          `json:"permissionDecisionReason,omitempty"`
 	Content                  json.RawMessage `json:"content,omitempty"`
@@ -174,6 +180,7 @@ type resolvedHook struct {
 	nativeEvent string
 	toolGlob    string
 	command     string
+	args        []string
 	timeout     time.Duration
 	cwd         string
 	env         map[string]string
@@ -318,14 +325,12 @@ func LoadShellHooksData(data []byte, opts ShellHooksOptions) (*ShellHooksRunner,
 		if !ok {
 			return nil, fmt.Errorf("hook: hooks[%d] unknown event %q", i, e.Event)
 		}
-		timeout := defaultShellHookTimeout
-		if e.TimeoutMs > 0 {
-			timeout = time.Duration(e.TimeoutMs) * time.Millisecond
-		}
+		timeout := shellHookTimeout(e)
 		resolved = append(resolved, resolvedHook{
 			nativeEvent: native,
 			toolGlob:    e.ToolName,
 			command:     e.Command,
+			args:        append([]string(nil), e.Args...),
 			timeout:     timeout,
 			cwd:         opts.CWD,
 			env:         mapsClone(opts.Env),
@@ -356,12 +361,24 @@ func parseShellHookEntries(data []byte) ([]shellHookEntry, error) {
 					Event:     event,
 					ToolName:  group.Matcher,
 					Command:   hook.Command,
+					Args:      append([]string(nil), hook.Args...),
 					TimeoutMs: hook.TimeoutMs,
+					Timeout:   hook.Timeout,
 				})
 			}
 		}
 	}
 	return entries, nil
+}
+
+func shellHookTimeout(e shellHookEntry) time.Duration {
+	if e.TimeoutMs > 0 {
+		return time.Duration(e.TimeoutMs) * time.Millisecond
+	}
+	if e.Timeout > 0 {
+		return time.Duration(e.Timeout) * time.Second
+	}
+	return defaultShellHookTimeout
 }
 
 func mapsClone(in map[string]string) map[string]string {
@@ -568,6 +585,9 @@ func pluginDecisionFromJSON(data []byte) (shellHookDecision, bool) {
 	if hookOut.PermissionDecisionReason != "" {
 		out.Reason = hookOut.PermissionDecisionReason
 	}
+	if content, ok := pluginUpdatedToolOutputContent(hookOut.UpdatedToolOutput); ok {
+		out.Content = content
+	}
 	if len(hookOut.Content) > 0 {
 		out.Content = hookOut.Content
 	}
@@ -578,6 +598,28 @@ func pluginDecisionFromJSON(data []byte) (shellHookDecision, bool) {
 		return shellHookDecision{}, false
 	}
 	return out, true
+}
+
+func pluginUpdatedToolOutputContent(raw json.RawMessage) (json.RawMessage, bool) {
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" || trimmed == "null" {
+		return nil, false
+	}
+	var text string
+	if err := json.Unmarshal(raw, &text); err == nil {
+		content, err := json.Marshal([]ai.ContentBlock{{Type: ai.ContentText, Text: text}})
+		return content, err == nil
+	}
+	if strings.HasPrefix(trimmed, "[") {
+		return raw, true
+	}
+	var wrapped struct {
+		Content json.RawMessage `json:"content"`
+	}
+	if err := json.Unmarshal(raw, &wrapped); err == nil && len(wrapped.Content) > 0 {
+		return wrapped.Content, true
+	}
+	return nil, false
 }
 
 // exec runs the hook command with stdin = event JSON and returns its stdout.
@@ -599,8 +641,7 @@ func (r *ShellHooksRunner) exec(
 	cctx, cancel := context.WithTimeout(ctx, h.timeout)
 	defer cancel()
 
-	command := replaceHookEnv(h.command, h.env)
-	cmd := exec.CommandContext(cctx, "sh", "-c", command)
+	cmd := shellHookExecCommand(cctx, h, h.env)
 	if h.cwd != "" {
 		cmd.Dir = h.cwd
 	}
@@ -645,6 +686,18 @@ func replaceHookEnv(text string, env map[string]string) string {
 		text = strings.ReplaceAll(text, "$"+key, value)
 	}
 	return text
+}
+
+func shellHookExecCommand(ctx context.Context, h resolvedHook, env map[string]string) *exec.Cmd {
+	command := replaceHookEnv(h.command, env)
+	if len(h.args) == 0 {
+		return exec.CommandContext(ctx, "sh", "-c", command)
+	}
+	args := make([]string, 0, len(h.args))
+	for _, arg := range h.args {
+		args = append(args, replaceHookEnv(arg, env))
+	}
+	return exec.CommandContext(ctx, command, args...)
 }
 
 func pluginHookInput(nativeEvent string, event any, sessionID string) any {
@@ -1056,7 +1109,20 @@ func eventToolName(event any) string {
 }
 
 func toolNameMatches(pattern string, name string) bool {
+	for _, part := range strings.FieldsFunc(pattern, func(r rune) bool { return r == '|' || r == ',' }) {
+		if part != pattern && toolNameMatches(strings.TrimSpace(part), name) {
+			return true
+		}
+	}
 	candidates := []string{name, nativeToPluginToolName(name), strings.ToLower(name)}
+	if re := compileToolNameMatcher(pattern); re != nil {
+		for _, candidate := range candidates {
+			if re.MatchString(candidate) {
+				return true
+			}
+		}
+		return false
+	}
 	patterns := []string{pattern, strings.ToLower(pattern)}
 	for _, pat := range patterns {
 		for _, candidate := range candidates {
@@ -1066,4 +1132,25 @@ func toolNameMatches(pattern string, name string) bool {
 		}
 	}
 	return false
+}
+
+func compileToolNameMatcher(pattern string) *regexp.Regexp {
+	pattern = strings.TrimSpace(pattern)
+	if !strings.HasPrefix(pattern, "/") {
+		return nil
+	}
+	end := strings.LastIndex(pattern, "/")
+	if end <= 0 {
+		return nil
+	}
+	expr := pattern[1:end]
+	flags := pattern[end+1:]
+	if strings.Contains(flags, "i") {
+		expr = "(?i)" + expr
+	}
+	re, err := regexp.Compile(expr)
+	if err != nil {
+		return nil
+	}
+	return re
 }

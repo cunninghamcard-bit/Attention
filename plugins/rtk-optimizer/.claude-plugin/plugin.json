@@ -1,0 +1,12 @@
+{
+  "name": "rtk-optimizer",
+  "displayName": "RTK Optimizer",
+  "version": "0.1.0",
+  "description": "No-UI RTK rewrite and output-compaction hooks for Claude Code.",
+  "author": {
+    "name": "MasuRii/pi-rtk-optimizer port"
+  },
+  "repository": "https://github.com/MasuRii/pi-rtk-optimizer",
+  "license": "MIT",
+  "keywords": ["rtk", "hooks", "optimization"]
+}
