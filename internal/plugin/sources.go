@@ -1,4 +1,4 @@
-package extension
+package plugin
 
 import (
 	"context"
@@ -128,13 +128,13 @@ func defaultBundledPluginDirs() []string {
 	if exe, err := os.Executable(); err == nil {
 		exeDir := filepath.Dir(exe)
 		dirs = append(dirs,
-			filepath.Join(exeDir, "plugins"),
-			filepath.Join(exeDir, "..", "plugins"),
+			filepath.Join(exeDir, "extension"),
+			filepath.Join(exeDir, "..", "extension"),
 		)
 	}
 	if _, file, _, ok := runtime.Caller(0); ok {
-		repoRoot := filepath.Dir(filepath.Dir(file))
-		dirs = append(dirs, filepath.Join(repoRoot, "plugins"))
+		repoRoot := filepath.Dir(filepath.Dir(filepath.Dir(file)))
+		dirs = append(dirs, filepath.Join(repoRoot, "extension"))
 	}
 	return dirs
 }

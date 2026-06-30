@@ -36,7 +36,7 @@ go test ./...
 
 ## Built-in plugins
 
-Attention ships repository plugins from `plugins/<name>`. Enable one by name in
+Attention ships repository plugins from `extension/<name>`. Enable one by name in
 settings, for example:
 
 ```json

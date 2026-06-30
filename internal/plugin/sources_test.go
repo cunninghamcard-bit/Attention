@@ -1,4 +1,4 @@
-package extension
+package plugin
 
 import (
 	"context"
@@ -109,6 +109,22 @@ func TestLoadAgentPluginOverridesBundledPlugin(t *testing.T) {
 	}
 	if len(result.BinDirs) != 1 || result.BinDirs[0] != filepath.Join(agentRoot, "bin") {
 		t.Fatalf("bin dirs = %#v, want agent plugin bin", result.BinDirs)
+	}
+}
+
+func TestLoadRepositoryBuiltInRtkOptimizer(t *testing.T) {
+	agentDir := t.TempDir()
+	cwd := t.TempDir()
+
+	result := Load(config.Settings{"plugins": []string{"rtk-optimizer"}}, agentDir, cwd)
+	if len(result.Diagnostics) != 0 {
+		t.Fatalf("diagnostics = %#v, want none", result.Diagnostics)
+	}
+	if len(result.Sources) != 1 {
+		t.Fatalf("sources = %d, want built-in rtk optimizer source", len(result.Sources))
+	}
+	if result.Sources[0].Path != "plugin:rtk-optimizer" {
+		t.Fatalf("source path = %q, want plugin:rtk-optimizer", result.Sources[0].Path)
 	}
 }
 

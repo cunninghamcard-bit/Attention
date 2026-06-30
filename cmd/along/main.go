@@ -13,7 +13,6 @@ import (
 	"strings"
 	"syscall"
 
-	repoextension "github.com/cunninghamcard-bit/Attention/extension"
 	"github.com/cunninghamcard-bit/Attention/internal/ai"
 	"github.com/cunninghamcard-bit/Attention/internal/auth"
 	"github.com/cunninghamcard-bit/Attention/internal/config"
@@ -23,6 +22,7 @@ import (
 	rpcmode "github.com/cunninghamcard-bit/Attention/internal/mode/rpc"
 	"github.com/cunninghamcard-bit/Attention/internal/obs"
 	"github.com/cunninghamcard-bit/Attention/internal/orchestrator"
+	"github.com/cunninghamcard-bit/Attention/internal/plugin"
 	"github.com/cunninghamcard-bit/Attention/internal/provider"
 	"github.com/cunninghamcard-bit/Attention/internal/resource"
 	"github.com/cunninghamcard-bit/Attention/internal/session"
@@ -283,7 +283,7 @@ func run(ctx context.Context) error {
 		projectContext, contextDiagnostics = resource.LoadContextFiles(cwd, cfg.AgentDir)
 		resourceDiagnostics = append(resourceDiagnostics, contextDiagnostics...)
 	}
-	plugins := repoextension.Load(settings, cfg.AgentDir, cwd)
+	plugins := plugin.Load(settings, cfg.AgentDir, cwd)
 	resourceDiagnostics = append(resourceDiagnostics, plugins.Diagnostics...)
 	logResourceDiagnostics(os.Stderr, resourceDiagnostics)
 	obs.Time("context/skills/templates load")
