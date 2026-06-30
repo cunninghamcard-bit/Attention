@@ -36,6 +36,7 @@ type orchestratorCommonOptions struct {
 	Diagnostics        []resource.ResourceDiagnostic
 	ExecutionEnv       execenv.ExecutionEnv
 	Tools              []extension.ToolDefinition
+	Extensions         []orchestrator.ExtensionSource
 }
 
 func (c orchestratorCommonOptions) newOptions() orchestrator.NewOptions {
@@ -58,6 +59,7 @@ func (c orchestratorCommonOptions) newOptions() orchestrator.NewOptions {
 		Diagnostics:        c.Diagnostics,
 		ExecutionEnv:       c.ExecutionEnv,
 		Tools:              c.Tools,
+		Extensions:         c.Extensions,
 	}
 }
 
@@ -81,6 +83,7 @@ func (c orchestratorCommonOptions) openOptions() orchestrator.OpenOptions {
 		Diagnostics:        c.Diagnostics,
 		ExecutionEnv:       c.ExecutionEnv,
 		Tools:              c.Tools,
+		Extensions:         c.Extensions,
 	}
 }
 

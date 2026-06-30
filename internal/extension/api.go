@@ -14,6 +14,12 @@ type Handler func(context.Context, any, ExtensionContext) (any, error)
 // Factory registers extension capabilities through the provided API.
 type Factory func(api ExtensionAPI) error
 
+// Source identifies an extension factory loaded during runtime assembly.
+type Source struct {
+	Path    string
+	Factory Factory
+}
+
 // ExtensionAPI is the facade passed to an extension factory function.
 type ExtensionAPI struct {
 	On                 func(eventType string, handler Handler)

@@ -95,6 +95,54 @@ func TestShellHooksPreToolUseBlock(t *testing.T) {
 	}
 }
 
+func TestShellHooksPluginPreToolUseEnvelope(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell hooks test requires a POSIX shell")
+	}
+	dir := t.TempDir()
+	inputPath := filepath.Join(dir, "stdin.json")
+	cmd := writeScript(t, dir, "rewrite.sh", `cat > "`+inputPath+`"
+echo '{"hookSpecificOutput":{"hookEventName":"PreToolUse","updatedInput":{"command":"wrapped npm test"}}}'`)
+	hooks := writeHooks(t, dir, `{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"`+cmd+`"}]}]}}`)
+
+	runner, err := LoadShellHooksWithOptions(ShellHooksOptions{
+		Path:        hooks,
+		InputFormat: ShellHookInputPlugin,
+	})
+	if err != nil {
+		t.Fatalf("LoadShellHooksWithOptions: %v", err)
+	}
+	reg := NewRegistry()
+	runner.Register(reg, "sess-1")
+
+	res, err := reg.Emit(context.Background(), ToolCallEvent{
+		Type:       EventToolCall,
+		ToolCallId: "call-1",
+		ToolName:   "bash",
+		Input:      map[string]any{"command": "npm test"},
+	})
+	if err != nil {
+		t.Fatalf("Emit: %v", err)
+	}
+	tc, ok := res.(ToolCallResult)
+	if !ok {
+		t.Fatalf("result type = %T, want hook.ToolCallResult", res)
+	}
+	if tc.Input["command"] != "wrapped npm test" {
+		t.Fatalf("Input = %#v, want rewritten command", tc.Input)
+	}
+	data, err := os.ReadFile(inputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	for _, want := range []string{`"hook_event_name":"PreToolUse"`, `"tool_name":"Bash"`, `"tool_input":{"command":"npm test"}`} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("stdin = %s, missing %s", text, want)
+		}
+	}
+}
+
 func TestShellHooksAllowOnEmptyStdout(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell hooks test requires a POSIX shell")

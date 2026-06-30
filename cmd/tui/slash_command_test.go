@@ -52,21 +52,21 @@ func TestTUIDispatchesExtensionCommandOverRPC(t *testing.T) {
 		cfg: Config{
 			Agent: agent,
 			Commands: []CommandInfo{
-				{Name: "run", Source: "extension"},
+				{Name: "plugin-run", Source: "extension"},
 			},
 		},
 		inputModel: NewInputModel(nil, nil, nil, nil, ""),
 	}
 
-	got, cmd := m.handleSlashCommand(`/run one "two words"`)
+	got, cmd := m.handleSlashCommand(`/plugin-run one "two words"`)
 	if cmd != nil {
 		t.Fatal("handleSlashCommand returned prompt command, want synchronous extension dispatch")
 	}
 	if _, ok := got.(tea.Model); !ok {
 		t.Fatalf("returned model = %T, want tea.Model", got)
 	}
-	if agent.dispatchName != "run" || agent.dispatchArgs != `one "two words"` {
-		t.Fatalf("dispatch = %q %q, want run args", agent.dispatchName, agent.dispatchArgs)
+	if agent.dispatchName != "plugin-run" || agent.dispatchArgs != `one "two words"` {
+		t.Fatalf("dispatch = %q %q, want plugin-run args", agent.dispatchName, agent.dispatchArgs)
 	}
 	if len(m.chatModel.Messages) != 2 {
 		t.Fatalf("chat messages len = %d, want extension notifications", len(m.chatModel.Messages))

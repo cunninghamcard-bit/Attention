@@ -1,0 +1,152 @@
+package extension
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/cunninghamcard-bit/Attention/internal/config"
+	internalextension "github.com/cunninghamcard-bit/Attention/internal/extension"
+	"github.com/cunninghamcard-bit/Attention/internal/hook"
+)
+
+func TestLoadFilePluginSourcesHooksBinAndResources(t *testing.T) {
+	agentDir := t.TempDir()
+	cwd := t.TempDir()
+	root := filepath.Join(agentDir, "plugins", "rtk-optimizer")
+	writePluginFixture(t, root)
+
+	result := Load(config.Settings{
+		"plugins": []any{"rtk-optimizer"},
+	}, agentDir, cwd)
+	if len(result.Diagnostics) != 0 {
+		t.Fatalf("diagnostics = %#v, want none", result.Diagnostics)
+	}
+	if len(result.Sources) != 1 {
+		t.Fatalf("sources = %d, want 1", len(result.Sources))
+	}
+	if result.Sources[0].Path != "plugin:rtk-optimizer" || result.Sources[0].Factory == nil {
+		t.Fatalf("source = %#v, want plugin source", result.Sources[0])
+	}
+	if len(result.BinDirs) != 1 || result.BinDirs[0] != filepath.Join(root, "bin") {
+		t.Fatalf("bin dirs = %#v, want plugin bin", result.BinDirs)
+	}
+
+	reg := hook.NewRegistry()
+	_, err := internalextension.Load(result.Sources[0].Path, reg, func(context.Context) internalextension.ExtensionContext {
+		return internalextension.ExtensionContext{SessionID: "sess-1"}
+	}, result.Sources[0].Factory)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	patch, err := reg.Emit(context.Background(), hook.ToolCallEvent{
+		Type:     hook.EventToolCall,
+		ToolName: "bash",
+		Input:    map[string]any{"command": "npm test"},
+	})
+	if err != nil {
+		t.Fatalf("Emit tool_call: %v", err)
+	}
+	toolPatch := patch.(hook.ToolCallResult)
+	if toolPatch.Input["command"] != "rtk npm test" {
+		t.Fatalf("command = %#v, want rewritten command", toolPatch.Input["command"])
+	}
+
+	resources, err := reg.Emit(context.Background(), hook.ResourcesDiscoverEvent{
+		Type:   hook.EventResourcesDiscover,
+		CWD:    cwd,
+		Reason: "startup",
+	})
+	if err != nil {
+		t.Fatalf("Emit resources_discover: %v", err)
+	}
+	discovered := resources.(hook.ResourcesDiscoverResult)
+	if len(discovered.SkillPaths) != 1 || discovered.SkillPaths[0] != filepath.Join(root, "skills") {
+		t.Fatalf("SkillPaths = %#v, want plugin skills", discovered.SkillPaths)
+	}
+	if len(discovered.PromptPaths) != 1 || discovered.PromptPaths[0] != filepath.Join(root, "commands") {
+		t.Fatalf("PromptPaths = %#v, want plugin commands", discovered.PromptPaths)
+	}
+}
+
+func TestLoadMissingFilePluginReportsDiagnostic(t *testing.T) {
+	result := Load(config.Settings{"plugins": []string{"missing"}}, t.TempDir(), t.TempDir())
+	if len(result.Sources) != 0 {
+		t.Fatalf("sources = %#v, want none", result.Sources)
+	}
+	if len(result.Diagnostics) != 1 || result.Diagnostics[0].Type != "error" {
+		t.Fatalf("diagnostics = %#v, want one error", result.Diagnostics)
+	}
+}
+
+func TestFilePluginSystemDoesNotAddTypeScriptRuntime(t *testing.T) {
+	agentDir := t.TempDir()
+	cwd := t.TempDir()
+	root := filepath.Join(agentDir, "plugins", "ts-plugin")
+	mustMkdir(t, filepath.Join(root, ".claude-plugin"))
+	mustWrite(t, filepath.Join(root, ".claude-plugin", "plugin.json"), `{"name":"ts-plugin"}`)
+	mustWrite(t, filepath.Join(root, "package.json"), `{"scripts":{"postinstall":"touch should-not-run"}}`)
+	mustWrite(t, filepath.Join(root, "index.ts"), `throw new Error("should not run")`)
+
+	result := Load(config.Settings{"plugins": []string{"ts-plugin"}}, agentDir, cwd)
+	if len(result.Sources) != 1 {
+		t.Fatalf("sources = %#v, want plugin source", result.Sources)
+	}
+	if _, err := os.Stat(filepath.Join(root, "should-not-run")); !os.IsNotExist(err) {
+		t.Fatalf("package script marker err = %v, want not created", err)
+	}
+}
+
+func TestLoadRejectsPluginPathSetting(t *testing.T) {
+	result := Load(config.Settings{"plugins": []string{"./plugin"}}, t.TempDir(), t.TempDir())
+	if len(result.Sources) != 0 {
+		t.Fatalf("sources = %#v, want none", result.Sources)
+	}
+	if len(result.Diagnostics) != 1 || !strings.Contains(result.Diagnostics[0].Message, "must be a name") {
+		t.Fatalf("diagnostics = %#v, want plugin name error", result.Diagnostics)
+	}
+}
+
+func writePluginFixture(t *testing.T, root string) {
+	t.Helper()
+	mustMkdir(t, filepath.Join(root, ".claude-plugin"))
+	mustMkdir(t, filepath.Join(root, "hooks"))
+	mustMkdir(t, filepath.Join(root, "bin"))
+	mustMkdir(t, filepath.Join(root, "skills"))
+	mustMkdir(t, filepath.Join(root, "commands"))
+	mustWrite(t, filepath.Join(root, ".claude-plugin", "plugin.json"), `{"name":"rtk-optimizer","version":"1.0.0"}`)
+	mustWrite(t, filepath.Join(root, "hooks", "hooks.json"), `{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [{"type": "command", "command": "rewrite-hook"}]
+      }
+    ]
+  }
+}`)
+	mustWrite(t, filepath.Join(root, "bin", "rewrite-hook"), `#!/bin/sh
+cat >/dev/null
+echo '{"hookSpecificOutput":{"hookEventName":"PreToolUse","updatedInput":{"command":"rtk npm test"}}}'
+`)
+	if err := os.Chmod(filepath.Join(root, "bin", "rewrite-hook"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func mustMkdir(t *testing.T, path string) {
+	t.Helper()
+	if err := os.MkdirAll(path, 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func mustWrite(t *testing.T, path string, content string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}

@@ -13,6 +13,7 @@ import (
 	"strings"
 	"syscall"
 
+	repoextension "github.com/cunninghamcard-bit/Attention/extension"
 	"github.com/cunninghamcard-bit/Attention/internal/ai"
 	"github.com/cunninghamcard-bit/Attention/internal/auth"
 	"github.com/cunninghamcard-bit/Attention/internal/config"
@@ -282,6 +283,8 @@ func run(ctx context.Context) error {
 		projectContext, contextDiagnostics = resource.LoadContextFiles(cwd, cfg.AgentDir)
 		resourceDiagnostics = append(resourceDiagnostics, contextDiagnostics...)
 	}
+	plugins := repoextension.Load(settings, cfg.AgentDir, cwd)
+	resourceDiagnostics = append(resourceDiagnostics, plugins.Diagnostics...)
 	logResourceDiagnostics(os.Stderr, resourceDiagnostics)
 	obs.Time("context/skills/templates load")
 
@@ -299,8 +302,8 @@ func run(ctx context.Context) error {
 			noTools:       *noToolsFlag,
 			noBuiltinTool: *noBuiltinToolsFlag,
 		},
-		baseToolSet(env, shellCommandPrefix),
-		func() []extension.ToolDefinition { return allToolSet(env, shellCommandPrefix) },
+		baseToolSet(env, shellCommandPrefix, plugins.BinDirs...),
+		func() []extension.ToolDefinition { return allToolSet(env, shellCommandPrefix, plugins.BinDirs...) },
 	)
 	if err != nil {
 		return err
@@ -332,6 +335,7 @@ func run(ctx context.Context) error {
 		Diagnostics:        resourceDiagnostics,
 		ExecutionEnv:       env,
 		Tools:              tools,
+		Extensions:         plugins.Sources,
 	}
 
 	orch, err := buildOrchestrator(ctx, repo, plan, common)

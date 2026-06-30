@@ -941,6 +941,28 @@ func TestSlashCommandsPrependsBuiltinsAndAggregatesExtensionTemplatesAndSkills(t
 	}
 }
 
+func TestFilePluginHookCommandDoesNotBreakStartup(t *testing.T) {
+	runner, err := hook.LoadShellHooksData([]byte(`{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"missing-plugin-command"}]}]}}`), hook.ShellHooksOptions{
+		InputFormat: hook.ShellHookInputPlugin,
+	})
+	if err != nil {
+		t.Fatalf("LoadShellHooksData: %v", err)
+	}
+	o, _ := newTestOrchestrator(t, []ExtensionSource{{
+		Path: "plugin:lazy-hook",
+		Factory: func(api extension.ExtensionAPI) error {
+			for _, handler := range runner.Handlers() {
+				handler := handler
+				api.On(handler.EventType, func(ctx context.Context, event any, extCtx extension.ExtensionContext) (any, error) {
+					return handler.Handle(ctx, event, extCtx.SessionID)
+				})
+			}
+			return nil
+		},
+	}})
+	defer o.Close()
+}
+
 func TestSlashCommandsHonorsEnableSkillCommandsSetting(t *testing.T) {
 	ctx := context.Background()
 

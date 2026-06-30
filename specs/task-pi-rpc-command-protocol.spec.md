@@ -8,8 +8,8 @@ tags: [phase-2, rpc, slash-command, parity]
 
 Complete the RPC slash-command execution path so commands returned by
 `get_commands` can be executed by the kernel instead of being accidentally sent
-to the model. This provides the generic command protocol needed by native
-modules such as RTK without adding RTK-specific TUI behavior.
+to the model. This provides the generic command protocol needed by file
+plugins without adding plugin-specific TUI behavior.
 
 ## Decisions
 
@@ -36,14 +36,14 @@ modules such as RTK without adding RTK-specific TUI behavior.
 - cmd/tui/**
 
 ### Forbidden
-- Do not add RTK files or behavior.
+- Do not add plugin-specific files or behavior.
 - Do not hardcode any extension command name in the TUI.
 - Do not change builtin command semantics except where signatures must compile.
 - Do not change prompt template or skill expansion behavior.
 
 ### Out of Scope
 - Tool execution event mutation.
-- Native RTK module.
+- File plugin system.
 - Interactive command UIs.
 - Asynchronous UI event streaming for slash-command feedback.
 
@@ -58,9 +58,9 @@ Scenario: RPC executes extension command
 
 Scenario: command notifications are returned to RPC
   Test: TestServeDispatchCommandReturnsNotifications
-  Given an extension command calls `Notify("RTK available", "info")`
+  Given an extension command calls `Notify("Plugin available", "info")`
   When RPC dispatches that command
-  Then the response data contains a notification with message "RTK available"
+  Then the response data contains a notification with message "Plugin available"
   And the notification level is "info"
 
 Scenario: quoted args are parsed once
@@ -87,8 +87,8 @@ Scenario: unknown command returns RPC failure
 
 Scenario: TUI extension command does not submit prompt
   Test: TestTUIDispatchesExtensionCommandOverRPC
-  Given the command list contains source "extension" for command "rtk"
-  When the user submits `/rtk show`
+  Given the command list contains source "extension" for command "plugin-run"
+  When the user submits `/plugin-run show`
   Then the TUI calls RPC `dispatch_command`
   And the TUI does not call prompt submission for that slash line
 

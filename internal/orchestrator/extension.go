@@ -187,8 +187,9 @@ func (o *Orchestrator) extensionContext(ctx context.Context) extension.Extension
 	}
 
 	return extension.ExtensionContext{
-		Cwd:     o.extensionCwd(),
-		Session: readonlySessionView{session: o.session},
+		Cwd:       o.extensionCwd(),
+		SessionID: o.session.GetMetadata().ID,
+		Session:   readonlySessionView{session: o.session},
 		ModelRegistry: func() []extension.ModelInfo {
 			return extensionModelInfos(o.AvailableModels(ctx))
 		},

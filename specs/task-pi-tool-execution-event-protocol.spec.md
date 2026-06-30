@@ -7,17 +7,17 @@ tags: [phase-1, hook, rpc, parity]
 ## Intent
 
 Complete Attention's tool-execution lifecycle protocol so
-`tool_execution_update` and `tool_execution_end` are delivered to native hooks
-before they are published to RPC and TUI subscribers. Native handlers may
+`tool_execution_update` and `tool_execution_end` are delivered to kernel hooks
+before they are published to RPC and TUI subscribers. Hook handlers may
 mutate the same event object, matching Pi's event-first model without adding a
 separate patch-result protocol. This is a core Pi-compatible runtime contract
-and is not RTK-specific.
+and is not plugin-specific.
 
 ## Decisions
 
 - Keep `tool_execution_update` and `tool_execution_end` as plain hook events whose handler return values are ignored.
 - Emit `ToolExecutionUpdateEvent` and `ToolExecutionEndEvent` as mutable event pointers from the harness bridge.
-- Each native handler receives the same event object after earlier handlers have applied field mutations.
+- Each handler receives the same event object after earlier handlers have applied field mutations.
 - Handler errors are reported and dispatch continues to later handlers.
 - The orchestrator mode publisher runs after shell hooks and native/user extension handlers so subscribers receive the final mutated event.
 - Shell hooks remain notification-only for these lifecycle events and do not parse stdout as a JSON patch.
@@ -35,7 +35,7 @@ and is not RTK-specific.
 - internal/mode/rpc/**
 
 ### Forbidden
-- Do not add RTK files or behavior.
+- Do not add plugin-specific files or behavior.
 - Do not change slash-command execution.
 - Do not add patch-result types for tool execution lifecycle events.
 - Do not make unrelated notification events mutable.
@@ -43,7 +43,7 @@ and is not RTK-specific.
 
 ### Out of Scope
 - RPC slash-command dispatch.
-- Native RTK module.
+- File plugin system.
 - Interactive settings UI.
 
 ## Completion Criteria
@@ -77,9 +77,9 @@ Scenario: handler error does not block later mutation or publish
   Then the error is reported
   And subscribers still receive the later mutated event
 
-Scenario: publisher runs after native handlers
+Scenario: publisher runs after hook handlers
   Test: TestCompletionCriteriaToolExecutionPublisherRunsAfterNativeHandlers
-  Given a native handler mutates tool execution update and end events
+  Given a hook handler mutates tool execution update and end events
   When the orchestrator publishes those lifecycle events
   Then subscribers receive the final mutated event state
   And no TUI-specific branch is required

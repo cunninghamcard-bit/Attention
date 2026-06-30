@@ -8,17 +8,18 @@ import (
 	"image"
 	"image/color"
 	"image/png"
+	"os"
 	osexec "os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 
-	"github.com/cunninghamcard-bit/Attention/internal/extension"
 	"github.com/cunninghamcard-bit/Attention/internal/ai"
 	"github.com/cunninghamcard-bit/Attention/internal/config"
 	"github.com/cunninghamcard-bit/Attention/internal/execenv"
 	"github.com/cunninghamcard-bit/Attention/internal/execenv/local"
+	"github.com/cunninghamcard-bit/Attention/internal/extension"
 	"github.com/cunninghamcard-bit/Attention/internal/tool"
 	"github.com/cunninghamcard-bit/Attention/internal/tool/builtin"
 )
@@ -587,6 +588,35 @@ func TestBashToolPrependsCommandPrefixOnOwnLine(t *testing.T) {
 	text := resultText(t, result)
 	if !strings.Contains(text, "PREFIX\nBODY") {
 		t.Fatalf("bash prefix text = %q, want PREFIX line before BODY", text)
+	}
+}
+
+func TestBashToolPrependsPluginBinDirs(t *testing.T) {
+	t.Parallel()
+
+	if runtime.GOOS == "windows" {
+		t.Skip("plugin bin test uses POSIX shell")
+	}
+
+	ctx := context.Background()
+	env := local.New(t.TempDir())
+	binDir := t.TempDir()
+	toolPath := filepath.Join(binDir, "plugin-hello")
+	if err := os.WriteFile(toolPath, []byte("#!/bin/sh\nprintf 'from-plugin\\n'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(toolPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := executeTool(ctx, builtin.NewBashTool(env, "", binDir), map[string]any{
+		"command": "plugin-hello",
+	}, nil)
+	if err != nil {
+		t.Fatalf("bash Execute returned Go error: %v", err)
+	}
+	if got := resultText(t, result); got != "from-plugin\n" {
+		t.Fatalf("bash text = %q, want plugin bin command output", got)
 	}
 }
 

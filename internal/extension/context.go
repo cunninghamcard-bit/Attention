@@ -50,6 +50,7 @@ type ModelInfo struct {
 // access through the ContextFactory wrapper.
 type ExtensionContext struct {
 	Cwd                string
+	SessionID          string
 	Session            ReadonlySessionView
 	ModelRegistry      func() []ModelInfo
 	Model              func() ai.Model

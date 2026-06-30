@@ -61,10 +61,7 @@ func (e *BusyError) Unwrap() error {
 }
 
 // ExtensionSource identifies an extension factory loaded during assembly.
-type ExtensionSource struct {
-	Path    string
-	Factory extension.Factory
-}
+type ExtensionSource = extension.Source
 
 // NewOptions configures a fresh orchestrator session. If Session is nil, Repo
 // and CreateOptions are used to create a JSONL session.

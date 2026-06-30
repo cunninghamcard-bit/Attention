@@ -1,9 +1,8 @@
 package hook
 
-// shellhooks.go is a declarative shell-hooks runner in the Claude Code /
-// Antigravity style: a hooks.json file maps a lifecycle event to a shell
-// command; the command receives the hook Event as JSON on stdin and may print a
-// JSON {decision} on stdout to allow/block/mutate.
+// shellhooks.go is a declarative shell-hooks runner: a hooks.json file maps a
+// lifecycle event to a shell command; the command receives the hook Event as
+// JSON on stdin and may print a JSON {decision} on stdout to allow/block/mutate.
 //
 // It lives in package hook (not a separate package) for two reasons:
 //   - it must return the EXACT concrete result types the pipeline folds and the
@@ -44,13 +43,42 @@ const defaultShellHookTimeout = 30 * time.Second
 //	  {"event": "PostToolUse", "command": "./scrub-secrets.sh"}
 //	]
 //
-// event uses either the ecosystem (Claude Code) name or the native hook Event*
-// constant; it is translated to a native constant via the alias map. toolName,
+// event uses either the ecosystem name or the native hook Event* constant; it
+// is translated to a native constant via the alias map. toolName,
 // when set, is a filepath.Match glob filtered against the event's ToolName
 // (tool_call / tool_result only); empty => all tools / all events.
 type shellHookEntry struct {
 	Event     string `json:"event"`
 	ToolName  string `json:"toolName,omitempty"`
+	Command   string `json:"command"`
+	TimeoutMs int    `json:"timeoutMs,omitempty"`
+}
+
+type ShellHookInputFormat string
+
+const (
+	ShellHookInputNative ShellHookInputFormat = ""
+	ShellHookInputPlugin ShellHookInputFormat = "plugin"
+)
+
+type ShellHooksOptions struct {
+	Path        string
+	CWD         string
+	Env         map[string]string
+	InputFormat ShellHookInputFormat
+}
+
+type groupedHookConfig struct {
+	Hooks map[string][]groupedHookMatcher `json:"hooks"`
+}
+
+type groupedHookMatcher struct {
+	Matcher string               `json:"matcher"`
+	Hooks   []groupedHookCommand `json:"hooks"`
+}
+
+type groupedHookCommand struct {
+	Type      string `json:"type"`
 	Command   string `json:"command"`
 	TimeoutMs int    `json:"timeoutMs,omitempty"`
 }
@@ -126,17 +154,40 @@ type shellHookDecision struct {
 	ThemePaths  []string `json:"themePaths,omitempty"`
 }
 
+type pluginHookResponse struct {
+	Decision           string                   `json:"decision,omitempty"`
+	Reason             string                   `json:"reason,omitempty"`
+	HookSpecificOutput pluginHookSpecificOutput `json:"hookSpecificOutput,omitempty"`
+}
+
+type pluginHookSpecificOutput struct {
+	HookEventName            string          `json:"hookEventName,omitempty"`
+	UpdatedInput             map[string]any  `json:"updatedInput,omitempty"`
+	PermissionDecision       string          `json:"permissionDecision,omitempty"`
+	PermissionDecisionReason string          `json:"permissionDecisionReason,omitempty"`
+	Content                  json.RawMessage `json:"content,omitempty"`
+	IsError                  *bool           `json:"isError,omitempty"`
+}
+
 // resolvedHook is a parsed, ready-to-register rule.
 type resolvedHook struct {
 	nativeEvent string
 	toolGlob    string
 	command     string
 	timeout     time.Duration
+	cwd         string
+	env         map[string]string
+	inputFormat ShellHookInputFormat
 }
 
 // ShellHooksRunner registers declarative shell-hook handlers on a Registry.
 type ShellHooksRunner struct {
 	hooks []resolvedHook
+}
+
+type ShellHookHandler struct {
+	EventType string
+	Handle    func(context.Context, any, string) (any, error)
 }
 
 // decisionEvents are the events whose handler result influences behavior. The
@@ -160,14 +211,14 @@ var decisionEvents = map[string]bool{
 
 // eventAliases maps every hooks.json "event" name to its native hook Event*
 // constant. It accepts BOTH the native event name (so any kernel event can be
-// targeted by its real name) AND, where one exists, the ecosystem / Claude Code
-// name (PreToolUse, PostToolUse, UserPromptSubmit, SessionStart, Stop, ...).
+// targeted by its real name) AND ecosystem aliases (PreToolUse, PostToolUse,
+// UserPromptSubmit, SessionStart, Stop, ...).
 //
 // Every native event in events.go that has a live emit site is reachable here.
 // queue_update is intentionally accepted too (so a typo is not the silent cause
 // of nothing happening) but warned about at registration as genuinely inert.
 var eventAliases = map[string]string{
-	// Ecosystem (Claude Code / Antigravity) names.
+	// Ecosystem aliases.
 	"PreToolUse":       EventToolCall,
 	"PostToolUse":      EventToolResult,
 	"UserPromptSubmit": EventInput,
@@ -228,23 +279,31 @@ var inertEvents = map[string]bool{
 // rule set returns (nil, nil) so the caller preserves today's no-hooks
 // behavior. A malformed file returns an error.
 func LoadShellHooks(path string) (*ShellHooksRunner, error) {
-	if path == "" {
+	return LoadShellHooksWithOptions(ShellHooksOptions{Path: path})
+}
+
+func LoadShellHooksWithOptions(opts ShellHooksOptions) (*ShellHooksRunner, error) {
+	if opts.Path == "" {
 		return nil, nil
 	}
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(opts.Path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("hook: read hooks file %q: %w", path, err)
+		return nil, fmt.Errorf("hook: read hooks file %q: %w", opts.Path, err)
 	}
+	return LoadShellHooksData(data, opts)
+}
+
+func LoadShellHooksData(data []byte, opts ShellHooksOptions) (*ShellHooksRunner, error) {
 	if len(strings.TrimSpace(string(data))) == 0 {
 		return nil, nil
 	}
 
-	var entries []shellHookEntry
-	if err := json.Unmarshal(data, &entries); err != nil {
-		return nil, fmt.Errorf("hook: parse hooks file %q: %w", path, err)
+	entries, err := parseShellHookEntries(data)
+	if err != nil {
+		return nil, fmt.Errorf("hook: parse hooks file %q: %w", opts.Path, err)
 	}
 	if len(entries) == 0 {
 		return nil, nil
@@ -268,9 +327,52 @@ func LoadShellHooks(path string) (*ShellHooksRunner, error) {
 			toolGlob:    e.ToolName,
 			command:     e.Command,
 			timeout:     timeout,
+			cwd:         opts.CWD,
+			env:         mapsClone(opts.Env),
+			inputFormat: opts.InputFormat,
 		})
 	}
 	return &ShellHooksRunner{hooks: resolved}, nil
+}
+
+func parseShellHookEntries(data []byte) ([]shellHookEntry, error) {
+	var entries []shellHookEntry
+	if err := json.Unmarshal(data, &entries); err == nil {
+		return entries, nil
+	}
+
+	var cfg groupedHookConfig
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return nil, err
+	}
+	entries = []shellHookEntry{}
+	for event, groups := range cfg.Hooks {
+		for _, group := range groups {
+			for _, hook := range group.Hooks {
+				if hook.Type != "" && hook.Type != "command" {
+					continue
+				}
+				entries = append(entries, shellHookEntry{
+					Event:     event,
+					ToolName:  group.Matcher,
+					Command:   hook.Command,
+					TimeoutMs: hook.TimeoutMs,
+				})
+			}
+		}
+	}
+	return entries, nil
+}
+
+func mapsClone(in map[string]string) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
 }
 
 // HasHandlers reports whether any rules were loaded.
@@ -285,77 +387,93 @@ func (r *ShellHooksRunner) Register(reg *Registry, sessionID string) {
 	if r == nil || reg == nil {
 		return
 	}
+	for _, handler := range r.Handlers() {
+		handler := handler
+		reg.On(handler.EventType, func(ctx context.Context, event any) (any, error) {
+			return handler.Handle(ctx, event, sessionID)
+		})
+	}
+}
+
+func (r *ShellHooksRunner) Handlers() []ShellHookHandler {
+	if r == nil {
+		return nil
+	}
+	handlers := make([]ShellHookHandler, 0, len(r.hooks))
 	for _, h := range r.hooks {
 		if inertEvents[h.nativeEvent] {
 			fmt.Fprintf(os.Stderr,
 				"hook: shell hook on %q registered but INERT (no emit site through hook.Registry; it will never fire)\n",
 				h.nativeEvent)
 		}
-		h := h // capture per-iteration
-		reg.On(h.nativeEvent, r.makeHandler(h, sessionID))
+		h := h
+		handlers = append(handlers, ShellHookHandler{
+			EventType: h.nativeEvent,
+			Handle: func(ctx context.Context, event any, sessionID string) (any, error) {
+				return r.handle(ctx, h, event, sessionID)
+			},
+		})
 	}
+	return handlers
 }
 
-// makeHandler builds the Registry Handler for a single rule.
-func (r *ShellHooksRunner) makeHandler(h resolvedHook, sessionID string) Handler {
-	return func(ctx context.Context, event any) (any, error) {
-		// Tool-name glob filter (tool_call / tool_result only; other events have
-		// no ToolName and are unaffected).
-		if h.toolGlob != "" {
-			name := eventToolName(event)
-			if name == "" {
-				return nil, nil
-			}
-			if matched, _ := filepath.Match(h.toolGlob, name); !matched {
-				return nil, nil
-			}
-		}
-
-		// Notification events run the command for side effects and never shape a
-		// result. Run unconditionally (no decision parse needed) and return
-		// (nil, nil).
-		if !decisionEvents[h.nativeEvent] {
-			r.runCommandNotify(ctx, h, sessionID, event)
+func (r *ShellHooksRunner) handle(ctx context.Context, h resolvedHook, event any, sessionID string) (any, error) {
+	// Tool-name glob filter (tool_call / tool_result only; other events have
+	// no ToolName and are unaffected).
+	if h.toolGlob != "" {
+		name := eventToolName(event)
+		if name == "" {
 			return nil, nil
 		}
-
-		decision, ran := r.runCommand(ctx, h, sessionID, event)
-		if !ran {
-			// Exec/parse error or no opinion => allow / no-change default.
+		if !toolNameMatches(h.toolGlob, name) {
 			return nil, nil
 		}
+	}
 
-		switch h.nativeEvent {
-		case EventToolCall:
-			return toolCallResultFrom(decision), nil
-		case EventToolResult:
-			return toolResultPatchFrom(decision), nil
-		case EventBeforeAgentStart:
-			return beforeAgentStartResultFrom(decision), nil
-		case EventContext:
-			return contextResultFrom(decision), nil
-		case EventInput:
-			return inputResultFrom(decision), nil
-		case EventBeforeProviderRequest:
-			return beforeProviderRequestResultFrom(decision), nil
-		case EventBeforeProviderPayload:
-			return beforeProviderPayloadResultFrom(decision), nil
-		case EventMessageEnd:
-			return messageEndResultFrom(decision), nil
-		case EventSessionBeforeSwitch:
-			return sessionBeforeSwitchResultFrom(decision), nil
-		case EventSessionBeforeFork:
-			return sessionBeforeForkResultFrom(decision), nil
-		case EventSessionBeforeCompact:
-			return sessionBeforeCompactResultFrom(decision), nil
-		case EventSessionBeforeTree:
-			return sessionBeforeTreeResultFrom(decision), nil
-		case EventResourcesDiscover:
-			return resourcesDiscoverResultFrom(decision), nil
-		default:
-			// Should not happen: decisionEvents and this switch are kept in sync.
-			return nil, nil
-		}
+	// Notification events run the command for side effects and never shape a
+	// result. Run unconditionally (no decision parse needed) and return
+	// (nil, nil).
+	if !decisionEvents[h.nativeEvent] {
+		r.runCommandNotify(ctx, h, sessionID, event)
+		return nil, nil
+	}
+
+	decision, ran := r.runCommand(ctx, h, sessionID, event)
+	if !ran {
+		// Exec/parse error or no opinion => allow / no-change default.
+		return nil, nil
+	}
+
+	switch h.nativeEvent {
+	case EventToolCall:
+		return toolCallResultFrom(decision), nil
+	case EventToolResult:
+		return toolResultPatchFrom(decision), nil
+	case EventBeforeAgentStart:
+		return beforeAgentStartResultFrom(decision), nil
+	case EventContext:
+		return contextResultFrom(decision), nil
+	case EventInput:
+		return inputResultFrom(decision), nil
+	case EventBeforeProviderRequest:
+		return beforeProviderRequestResultFrom(decision), nil
+	case EventBeforeProviderPayload:
+		return beforeProviderPayloadResultFrom(decision), nil
+	case EventMessageEnd:
+		return messageEndResultFrom(decision), nil
+	case EventSessionBeforeSwitch:
+		return sessionBeforeSwitchResultFrom(decision), nil
+	case EventSessionBeforeFork:
+		return sessionBeforeForkResultFrom(decision), nil
+	case EventSessionBeforeCompact:
+		return sessionBeforeCompactResultFrom(decision), nil
+	case EventSessionBeforeTree:
+		return sessionBeforeTreeResultFrom(decision), nil
+	case EventResourcesDiscover:
+		return resourcesDiscoverResultFrom(decision), nil
+	default:
+		// Should not happen: decisionEvents and this switch are kept in sync.
+		return nil, nil
 	}
 }
 
@@ -392,10 +510,74 @@ func (r *ShellHooksRunner) runCommand(
 	}
 
 	var decision shellHookDecision
-	if err := json.Unmarshal([]byte(trimmed), &decision); err != nil {
+	if err := json.Unmarshal([]byte(trimmed), &decision); err == nil && !isZeroDecision(decision) {
+		return decision, true
+	}
+
+	pluginDecision, ok := pluginDecisionFromJSON([]byte(trimmed))
+	if !ok {
 		return shellHookDecision{}, false
 	}
-	return decision, true
+	return pluginDecision, true
+}
+
+func isZeroDecision(d shellHookDecision) bool {
+	return d.Decision == "" &&
+		d.Reason == "" &&
+		d.Input == nil &&
+		len(d.Content) == 0 &&
+		len(d.Details) == 0 &&
+		d.IsError == nil &&
+		d.Terminate == nil &&
+		d.SystemPrompt == nil &&
+		len(d.Messages) == 0 &&
+		d.Action == "" &&
+		d.Text == "" &&
+		len(d.Images) == 0 &&
+		len(d.StreamOptions) == 0 &&
+		len(d.Payload) == 0 &&
+		len(d.Message) == 0 &&
+		!d.Cancel &&
+		!d.SkipConversationRestore &&
+		d.Compaction == nil &&
+		d.Summary == nil &&
+		d.CustomInstructions == nil &&
+		d.ReplaceInstructions == nil &&
+		d.Label == nil &&
+		len(d.SkillPaths) == 0 &&
+		len(d.PromptPaths) == 0 &&
+		len(d.ThemePaths) == 0
+}
+
+func pluginDecisionFromJSON(data []byte) (shellHookDecision, bool) {
+	var resp pluginHookResponse
+	if err := json.Unmarshal(data, &resp); err != nil {
+		return shellHookDecision{}, false
+	}
+	out := shellHookDecision{
+		Decision: resp.Decision,
+		Reason:   resp.Reason,
+	}
+	hookOut := resp.HookSpecificOutput
+	if hookOut.UpdatedInput != nil {
+		out.Input = hookOut.UpdatedInput
+	}
+	if hookOut.PermissionDecision != "" {
+		out.Decision = hookOut.PermissionDecision
+	}
+	if hookOut.PermissionDecisionReason != "" {
+		out.Reason = hookOut.PermissionDecisionReason
+	}
+	if len(hookOut.Content) > 0 {
+		out.Content = hookOut.Content
+	}
+	if hookOut.IsError != nil {
+		out.IsError = hookOut.IsError
+	}
+	if isZeroDecision(out) {
+		return shellHookDecision{}, false
+	}
+	return out, true
 }
 
 // exec runs the hook command with stdin = event JSON and returns its stdout.
@@ -405,7 +587,11 @@ func (r *ShellHooksRunner) exec(
 	sessionID string,
 	event any,
 ) ([]byte, error) {
-	eventJSON, err := json.Marshal(event)
+	input := event
+	if h.inputFormat == ShellHookInputPlugin {
+		input = pluginHookInput(h.nativeEvent, event, sessionID)
+	}
+	eventJSON, err := json.Marshal(input)
 	if err != nil {
 		return nil, err
 	}
@@ -413,10 +599,121 @@ func (r *ShellHooksRunner) exec(
 	cctx, cancel := context.WithTimeout(ctx, h.timeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(cctx, "sh", "-c", h.command)
+	command := replaceHookEnv(h.command, h.env)
+	cmd := exec.CommandContext(cctx, "sh", "-c", command)
+	if h.cwd != "" {
+		cmd.Dir = h.cwd
+	}
 	cmd.Stdin = strings.NewReader(string(eventJSON))
-	cmd.Env = append(os.Environ(), "ALONG_SESSION_ID="+sessionID)
+	cmd.Env = mergeHookEnv(h.env, sessionID)
 	return cmd.Output()
+}
+
+func mergeHookEnv(extra map[string]string, sessionID string) []string {
+	env := os.Environ()
+	seen := map[string]bool{}
+	for _, entry := range env {
+		key, _, ok := strings.Cut(entry, "=")
+		if ok {
+			seen[key] = true
+		}
+	}
+	set := func(key string, value string) {
+		entry := key + "=" + value
+		if !seen[key] {
+			env = append(env, entry)
+			seen[key] = true
+			return
+		}
+		for i, existing := range env {
+			if strings.HasPrefix(existing, key+"=") {
+				env[i] = entry
+				return
+			}
+		}
+	}
+	for key, value := range extra {
+		set(key, value)
+	}
+	set("ALONG_SESSION_ID", sessionID)
+	return env
+}
+
+func replaceHookEnv(text string, env map[string]string) string {
+	for key, value := range env {
+		text = strings.ReplaceAll(text, "${"+key+"}", value)
+		text = strings.ReplaceAll(text, "$"+key, value)
+	}
+	return text
+}
+
+func pluginHookInput(nativeEvent string, event any, sessionID string) any {
+	base := map[string]any{
+		"hook_event_name": nativeToPluginHookEvent(nativeEvent),
+		"session_id":      sessionID,
+	}
+	switch ev := event.(type) {
+	case ToolCallEvent:
+		base["tool_name"] = nativeToPluginToolName(ev.ToolName)
+		base["tool_input"] = ev.Input
+		base["tool_call_id"] = ev.ToolCallId
+	case ToolResultEvent:
+		base["tool_name"] = nativeToPluginToolName(ev.ToolName)
+		base["tool_input"] = ev.Input
+		base["tool_response"] = map[string]any{
+			"content":  ev.Content,
+			"details":  ev.Details,
+			"is_error": ev.IsError,
+		}
+		base["tool_call_id"] = ev.ToolCallId
+	case InputEvent:
+		base["prompt"] = ev.Text
+	case SessionBeforeCompactEvent:
+		base["custom_instructions"] = ev.CustomInstructions
+	case SessionStartEvent:
+		base["source"] = ev.Reason
+	}
+	return base
+}
+
+func nativeToPluginHookEvent(native string) string {
+	switch native {
+	case EventToolCall:
+		return "PreToolUse"
+	case EventToolResult:
+		return "PostToolUse"
+	case EventInput:
+		return "UserPromptSubmit"
+	case EventBeforeAgentStart, EventSessionStart:
+		return "SessionStart"
+	case EventSessionBeforeCompact:
+		return "PreCompact"
+	case EventSettled:
+		return "Stop"
+	default:
+		return native
+	}
+}
+
+func nativeToPluginToolName(name string) string {
+	switch strings.ToLower(name) {
+	case "bash":
+		return "Bash"
+	case "read":
+		return "Read"
+	case "write":
+		return "Write"
+	case "edit":
+		return "Edit"
+	case "grep":
+		return "Grep"
+	case "find":
+		return "Glob"
+	case "ls":
+		return "LS"
+	default:
+		return name
+	}
 }
 
 // --- Decision result converters. Each returns the EXACT concrete result type
@@ -756,4 +1053,17 @@ func eventToolName(event any) string {
 	default:
 		return ""
 	}
+}
+
+func toolNameMatches(pattern string, name string) bool {
+	candidates := []string{name, nativeToPluginToolName(name), strings.ToLower(name)}
+	patterns := []string{pattern, strings.ToLower(pattern)}
+	for _, pat := range patterns {
+		for _, candidate := range candidates {
+			if matched, _ := filepath.Match(pat, candidate); matched {
+				return true
+			}
+		}
+	}
+	return false
 }

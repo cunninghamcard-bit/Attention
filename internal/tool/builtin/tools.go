@@ -1,15 +1,15 @@
 package builtin
 
 import (
-	"github.com/cunninghamcard-bit/Attention/internal/extension"
 	"github.com/cunninghamcard-bit/Attention/internal/execenv"
+	"github.com/cunninghamcard-bit/Attention/internal/extension"
 )
 
 // NewCodingTools creates pi's default coding tool set.
-func NewCodingTools(env execenv.ExecutionEnv, shellCommandPrefix string) []extension.ToolDefinition {
+func NewCodingTools(env execenv.ExecutionEnv, shellCommandPrefix string, extraBinDirs ...string) []extension.ToolDefinition {
 	return []extension.ToolDefinition{
 		NewReadTool(env),
-		NewBashTool(env, shellCommandPrefix),
+		NewBashTool(env, shellCommandPrefix, extraBinDirs...),
 		NewEditTool(env),
 		NewWriteTool(env),
 	}
@@ -26,10 +26,10 @@ func NewReadOnlyTools(env execenv.ExecutionEnv) []extension.ToolDefinition {
 }
 
 // NewAllTools creates the full built-in tool set.
-func NewAllTools(env execenv.ExecutionEnv, shellCommandPrefix string) []extension.ToolDefinition {
+func NewAllTools(env execenv.ExecutionEnv, shellCommandPrefix string, extraBinDirs ...string) []extension.ToolDefinition {
 	return []extension.ToolDefinition{
 		NewReadTool(env),
-		NewBashTool(env, shellCommandPrefix),
+		NewBashTool(env, shellCommandPrefix, extraBinDirs...),
 		NewEditTool(env),
 		NewWriteTool(env),
 		NewGrepTool(env),

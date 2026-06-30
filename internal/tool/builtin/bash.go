@@ -10,9 +10,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cunninghamcard-bit/Attention/internal/extension"
 	"github.com/cunninghamcard-bit/Attention/internal/ai"
 	"github.com/cunninghamcard-bit/Attention/internal/execenv"
+	"github.com/cunninghamcard-bit/Attention/internal/extension"
 	"github.com/cunninghamcard-bit/Attention/internal/tool"
 )
 
@@ -55,7 +55,7 @@ type bashToolArgs struct {
 }
 
 // NewBashTool creates the built-in bash tool.
-func NewBashTool(env execenv.ExecutionEnv, commandPrefix string) extension.ToolDefinition {
+func NewBashTool(env execenv.ExecutionEnv, commandPrefix string, extraBinDirs ...string) extension.ToolDefinition {
 	return extension.ToolDefinition{
 		Name: "bash",
 		Description: fmt.Sprintf(
@@ -69,7 +69,7 @@ func NewBashTool(env execenv.ExecutionEnv, commandPrefix string) extension.ToolD
 		Label:         "bash",
 		PromptSnippet: "Run a bash command and return its output",
 		Execute: func(ctx context.Context, call extension.ToolCall, onUpdate tool.UpdateCallback, _ extension.ExtensionContext) (tool.Result, error) {
-			return executeBash(ctx, env, commandPrefix, call.Args, onUpdate), nil
+			return executeBash(ctx, env, commandPrefix, extraBinDirs, call.Args, onUpdate), nil
 		},
 	}
 }
@@ -77,9 +77,13 @@ func NewBashTool(env execenv.ExecutionEnv, commandPrefix string) extension.ToolD
 // shellEnv mirrors pi's getShellEnv: bash commands run with the managed bin
 // dir (downloaded rg/fd) prepended to PATH, case-insensitive key, no
 // duplicates (utils/shell.ts:112-124). Returns nil when nothing to override.
-func shellEnv() map[string]string {
+func shellEnv(extraBinDirs []string) map[string]string {
 	binDir, err := searchToolBinDir()
-	if err != nil {
+	dirs := append([]string(nil), extraBinDirs...)
+	if err == nil {
+		dirs = append(dirs, binDir)
+	}
+	if len(dirs) == 0 {
 		return nil
 	}
 	pathKey := "PATH"
@@ -92,21 +96,36 @@ func shellEnv() map[string]string {
 			break
 		}
 	}
-	for _, dir := range filepath.SplitList(current) {
-		if dir == binDir {
-			return nil
+	prefix := []string{}
+	for _, dir := range dirs {
+		if dir == "" {
+			continue
+		}
+		seen := false
+		for _, existing := range append(prefix, filepath.SplitList(current)...) {
+			if existing == dir {
+				seen = true
+				break
+			}
+		}
+		if !seen {
+			prefix = append(prefix, dir)
 		}
 	}
-	if current == "" {
-		return map[string]string{pathKey: binDir}
+	if len(prefix) == 0 {
+		return nil
 	}
-	return map[string]string{pathKey: binDir + string(os.PathListSeparator) + current}
+	if current == "" {
+		return map[string]string{pathKey: strings.Join(prefix, string(os.PathListSeparator))}
+	}
+	return map[string]string{pathKey: strings.Join(prefix, string(os.PathListSeparator)) + string(os.PathListSeparator) + current}
 }
 
 func executeBash(
 	ctx context.Context,
 	env execenv.ExecutionEnv,
 	commandPrefix string,
+	extraBinDirs []string,
 	args map[string]any,
 	onUpdate tool.UpdateCallback,
 ) tool.Result {
@@ -195,7 +214,7 @@ func executeBash(
 
 	result, err := env.Exec(ctx, a.Command, execenv.ExecOptions{
 		Timeout:  timeout,
-		Env:      shellEnv(),
+		Env:      shellEnv(extraBinDirs),
 		Stdout:   capture,
 		Stderr:   capture,
 		OnStdout: func(string) { scheduleUpdate() },
@@ -227,7 +246,7 @@ func executeBash(
 func RunBash(ctx context.Context, env execenv.ExecutionEnv, command string) BashRun {
 	capture := newShellCapture(ctx, env)
 	result, err := env.Exec(ctx, command, execenv.ExecOptions{
-		Env:    shellEnv(),
+		Env:    shellEnv(nil),
 		Stdout: capture,
 		Stderr: capture,
 	})
