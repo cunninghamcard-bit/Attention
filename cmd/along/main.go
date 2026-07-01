@@ -299,16 +299,20 @@ func run(ctx context.Context) error {
 	// Tool selection: --no-tools/--no-builtin-tools/--tools/--exclude-tools.
 	// Precedence and base sets are handled in selectTools (flags.go). The full
 	// tool set is passed as a thunk so it is only built when --tools is given.
-	tools, err := selectTools(
-		toolSelection{
-			tools:         splitCommaList(*toolsFlag),
-			excludeTools:  splitCommaList(*excludeToolsFlag),
-			noTools:       *noToolsFlag,
-			noBuiltinTool: *noBuiltinToolsFlag,
-		},
-		baseToolSet(env, shellCommandPrefix, plugins.BinDirs...),
-		func() []extension.ToolDefinition { return allToolSet(env, shellCommandPrefix, plugins.BinDirs...) },
-	)
+	selectedTools := toolSelection{
+		tools:         splitCommaList(*toolsFlag),
+		excludeTools:  splitCommaList(*excludeToolsFlag),
+		noTools:       *noToolsFlag,
+		noBuiltinTool: *noBuiltinToolsFlag,
+	}
+	buildTools := func(pluginBinDirs []string) ([]extension.ToolDefinition, error) {
+		return selectTools(
+			selectedTools,
+			baseToolSet(env, shellCommandPrefix, pluginBinDirs...),
+			func() []extension.ToolDefinition { return allToolSet(env, shellCommandPrefix, pluginBinDirs...) },
+		)
+	}
+	tools, err := buildTools(plugins.BinDirs)
 	if err != nil {
 		return err
 	}
@@ -339,6 +343,7 @@ func run(ctx context.Context) error {
 		Diagnostics:        resourceDiagnostics,
 		ExecutionEnv:       env,
 		Tools:              tools,
+		ToolBuilder:        buildTools,
 		Extensions:         plugins.Sources,
 	}
 

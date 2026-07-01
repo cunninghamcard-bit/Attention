@@ -1223,6 +1223,142 @@ func TestReloadSettingsReloadsResourcesAndPublishesUpdate(t *testing.T) {
 	}
 }
 
+func TestReloadSettingsLoadsNewlyEnabledFilePlugin(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	agentDir := filepath.Join(root, config.AgentDirName)
+	cwd := filepath.Join(root, "project")
+	if err := os.MkdirAll(agentDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(cwd, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	settingsPath := filepath.Join(agentDir, "settings.json")
+	writeSettingsFile(t, settingsPath, `{}`)
+	manager, err := config.NewManager(agentDir, cwd)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+
+	repo := session.NewJsonlSessionRepo(t.TempDir())
+	o, err := New(ctx, NewOptions{
+		Repo:            repo,
+		CreateOptions:   session.JsonlSessionCreateOptions{CWD: cwd},
+		ModelID:         "initial-model",
+		Provider:        testProviderRegistry(testModel("initial-model")),
+		ThinkingLevel:   agentloop.ThinkingOff,
+		Settings:        manager.Settings(),
+		SettingsManager: manager,
+		AgentDir:        agentDir,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if hasSlashCommandNamed(o.SlashCommands(), "demo-command") {
+		t.Fatal("demo-command exists before plugin is enabled")
+	}
+
+	pluginRoot := filepath.Join(root, "plugins", "demo-plugin")
+	if err := os.MkdirAll(filepath.Join(pluginRoot, ".attention-plugin"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(pluginRoot, ".attention-plugin", "plugin.json"),
+		[]byte(`{"name":"demo-plugin"}`),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	writeDiscoveredPrompt(t, filepath.Join(pluginRoot, "commands"), "demo-command", "Use demo command")
+	writeSettingsFile(t, settingsPath, `{"plugins":["demo-plugin"]}`)
+
+	if err := o.ReloadSettings(ctx); err != nil {
+		t.Fatalf("ReloadSettings: %v", err)
+	}
+	if !hasSlashCommandNamed(o.SlashCommands(), "demo-command") {
+		t.Fatalf("SlashCommands missing demo-command after reload: %#v", o.SlashCommands())
+	}
+}
+
+func TestReloadSettingsRebuildsToolsWithNewPluginBinDirs(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	agentDir := filepath.Join(root, config.AgentDirName)
+	cwd := filepath.Join(root, "project")
+	if err := os.MkdirAll(agentDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(cwd, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	settingsPath := filepath.Join(agentDir, "settings.json")
+	writeSettingsFile(t, settingsPath, `{}`)
+	manager, err := config.NewManager(agentDir, cwd)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+
+	var reloadBinDirs [][]string
+	repo := session.NewJsonlSessionRepo(t.TempDir())
+	o, err := New(ctx, NewOptions{
+		Repo:            repo,
+		CreateOptions:   session.JsonlSessionCreateOptions{CWD: cwd},
+		ModelID:         "initial-model",
+		Provider:        testProviderRegistry(testModel("initial-model")),
+		ThinkingLevel:   agentloop.ThinkingOff,
+		Settings:        manager.Settings(),
+		SettingsManager: manager,
+		AgentDir:        agentDir,
+		ToolBuilder: func(binDirs []string) ([]extension.ToolDefinition, error) {
+			reloadBinDirs = append(reloadBinDirs, append([]string(nil), binDirs...))
+			return []extension.ToolDefinition{{
+				Name:          "bash",
+				Description:   "Bash",
+				PromptSnippet: strings.Join(binDirs, string(os.PathListSeparator)),
+				Execute: func(
+					context.Context,
+					extension.ToolCall,
+					tool.UpdateCallback,
+					extension.ExtensionContext,
+				) (tool.Result, error) {
+					return tool.Result{}, nil
+				},
+			}}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	pluginRoot := filepath.Join(root, "plugins", "bin-plugin")
+	if err := os.MkdirAll(filepath.Join(pluginRoot, ".attention-plugin"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(pluginRoot, "bin"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(pluginRoot, ".attention-plugin", "plugin.json"),
+		[]byte(`{"name":"bin-plugin"}`),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	writeSettingsFile(t, settingsPath, `{"plugins":["bin-plugin"]}`)
+
+	if err := o.ReloadSettings(ctx); err != nil {
+		t.Fatalf("ReloadSettings: %v", err)
+	}
+	wantBin := filepath.Join(pluginRoot, "bin")
+	if len(reloadBinDirs) != 1 || !slices.Equal(reloadBinDirs[0], []string{wantBin}) {
+		t.Fatalf("reload bin dirs = %#v, want [[%s]]", reloadBinDirs, wantBin)
+	}
+	if len(o.baseToolDefs) != 1 || !strings.Contains(o.baseToolDefs[0].PromptSnippet, wantBin) {
+		t.Fatalf("baseToolDefs = %#v, want rebuilt tool with plugin bin", o.baseToolDefs)
+	}
+}
+
 func TestReloadSettingsEmitsResourcesDiscoverReasonReload(t *testing.T) {
 	ctx := context.Background()
 	cwd := t.TempDir()

@@ -20,6 +20,7 @@ import (
 	"github.com/cunninghamcard-bit/Attention/internal/harness"
 	"github.com/cunninghamcard-bit/Attention/internal/hook"
 	"github.com/cunninghamcard-bit/Attention/internal/message"
+	"github.com/cunninghamcard-bit/Attention/internal/plugin"
 	"github.com/cunninghamcard-bit/Attention/internal/provider"
 	"github.com/cunninghamcard-bit/Attention/internal/resource"
 	"github.com/cunninghamcard-bit/Attention/internal/session"
@@ -48,6 +49,7 @@ type Orchestrator struct {
 	tools               []tool.Tool
 	toolDefs            []extension.ToolDefinition
 	baseToolDefs        []extension.ToolDefinition
+	toolBuilder         ToolBuilder
 	extensions          []ExtensionSource
 	hooksPath           string
 	commands            map[string]extension.CommandDefinition
@@ -225,6 +227,7 @@ func New(ctx context.Context, opts NewOptions) (*Orchestrator, error) {
 		extensions:         opts.Extensions,
 		hooksPath:          opts.HooksPath,
 		tools:              opts.Tools,
+		toolBuilder:        opts.ToolBuilder,
 		promptTemplates:    opts.PromptTemplates,
 		skills:             opts.Skills,
 		promptPaths:        append([]string(nil), opts.PromptPaths...),
@@ -267,6 +270,7 @@ func Open(ctx context.Context, opts OpenOptions) (*Orchestrator, error) {
 		extensions:         opts.Extensions,
 		hooksPath:          opts.HooksPath,
 		tools:              opts.Tools,
+		toolBuilder:        opts.ToolBuilder,
 		promptTemplates:    opts.PromptTemplates,
 		skills:             opts.Skills,
 		promptPaths:        append([]string(nil), opts.PromptPaths...),
@@ -355,6 +359,7 @@ func assemble(ctx context.Context, s harness.Session, cfg runtimeConfig) (*Orche
 		commands:              map[string]extension.CommandDefinition{},
 		baseProvider:          baseProvider,
 		baseToolDefs:          append([]extension.ToolDefinition(nil), cfg.tools...),
+		toolBuilder:           cfg.toolBuilder,
 		extensions:            append([]ExtensionSource(nil), cfg.extensions...),
 		hooksPath:             cfg.hooksPath,
 		customSystemPrompt:    cfg.systemPrompt,
@@ -1082,6 +1087,7 @@ func (o *Orchestrator) ReloadSettings(ctx context.Context) error {
 	extensions := append([]ExtensionSource(nil), o.extensions...)
 	hooksPath := o.hooksPath
 	baseToolDefs := append([]extension.ToolDefinition(nil), o.baseToolDefs...)
+	toolBuilder := o.toolBuilder
 	agentDir := o.agentDir
 	contextFiles := append([]resource.ContextFile(nil), o.contextFiles...)
 	execEnv := o.execEnv
@@ -1113,6 +1119,15 @@ func (o *Orchestrator) ReloadSettings(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	plugins := plugin.Load(settings, agentDirForLoad, cwd)
+	extensions = reloadPluginExtensions(extensions, plugins.Sources)
+	if toolBuilder != nil {
+		reloadedTools, err := toolBuilder(plugins.BinDirs)
+		if err != nil {
+			return fmt.Errorf("orchestrator: reload tools: %w", err)
+		}
+		baseToolDefs = reloadedTools
+	}
 	if baseProvider == nil {
 		baseProvider = defaultProviderRegistry(model, getAPIKey)
 	}
@@ -1130,13 +1145,14 @@ func (o *Orchestrator) ReloadSettings(ctx context.Context) error {
 		extensions:             extensions,
 		hooksPath:              hooksPath,
 		tools:                  baseToolDefs,
+		toolBuilder:            toolBuilder,
 		promptTemplates:        base.promptTemplates,
 		skills:                 base.skills,
 		promptPaths:            promptPaths,
 		skillPaths:             skillPaths,
 		agentDir:               agentDir,
 		contextFiles:           contextFiles,
-		diagnostics:            base.diagnostics,
+		diagnostics:            append(base.diagnostics, plugins.Diagnostics...),
 		executionEnv:           execEnv,
 		recoverState:           false,
 		resourceDiscoverReason: "reload",
@@ -1180,6 +1196,7 @@ func (o *Orchestrator) ReloadSettings(ctx context.Context) error {
 	o.tools = fresh.tools
 	o.toolDefs = fresh.toolDefs
 	o.baseToolDefs = fresh.baseToolDefs
+	o.toolBuilder = fresh.toolBuilder
 	o.extensions = fresh.extensions
 	o.hooksPath = fresh.hooksPath
 	o.commands = fresh.commands
@@ -1200,6 +1217,16 @@ func (o *Orchestrator) ReloadSettings(ctx context.Context) error {
 
 	o.emitResourcesUpdate(ctx, current, previous)
 	return nil
+}
+
+func reloadPluginExtensions(existing []ExtensionSource, plugins []ExtensionSource) []ExtensionSource {
+	next := make([]ExtensionSource, 0, len(existing)+len(plugins))
+	for _, source := range existing {
+		if !strings.HasPrefix(source.Path, "plugin:") {
+			next = append(next, source)
+		}
+	}
+	return append(next, plugins...)
 }
 
 func loadBaseResources(

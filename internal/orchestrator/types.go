@@ -63,6 +63,8 @@ func (e *BusyError) Unwrap() error {
 // ExtensionSource identifies an extension factory loaded during assembly.
 type ExtensionSource = extension.Source
 
+type ToolBuilder func(pluginBinDirs []string) ([]extension.ToolDefinition, error)
+
 // NewOptions configures a fresh orchestrator session. If Session is nil, Repo
 // and CreateOptions are used to create a JSONL session.
 type NewOptions struct {
@@ -90,6 +92,9 @@ type NewOptions struct {
 	// or empty file is a no-op.
 	HooksPath string
 	Tools     []extension.ToolDefinition
+	// ToolBuilder rebuilds the selected tool set on reload after plugin bin
+	// directories have been refreshed.
+	ToolBuilder ToolBuilder
 
 	PromptTemplates []resource.PromptTemplate
 	Skills          []resource.Skill
@@ -129,6 +134,9 @@ type OpenOptions struct {
 	// or empty file is a no-op.
 	HooksPath string
 	Tools     []extension.ToolDefinition
+	// ToolBuilder rebuilds the selected tool set on reload after plugin bin
+	// directories have been refreshed.
+	ToolBuilder ToolBuilder
 
 	PromptTemplates []resource.PromptTemplate
 	Skills          []resource.Skill
@@ -156,6 +164,7 @@ type runtimeConfig struct {
 	extensions             []ExtensionSource
 	hooksPath              string
 	tools                  []extension.ToolDefinition
+	toolBuilder            ToolBuilder
 	promptTemplates        []resource.PromptTemplate
 	skills                 []resource.Skill
 	promptPaths            []string
