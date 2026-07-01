@@ -17,9 +17,9 @@ engine or compile an RTK-specific Go extension.
 
 - Enabled plugin names come from settings key `plugins`.
 - Named plugins resolve under project `.along/plugins/<name>` first, then
-  global `~/.along/plugins/<name>`, then built-in plugin directories shipped as
-  `extension/<name>` next to the installed binary. The source tree `extension/`
-  is a development fallback.
+  global `~/.along/plugins/<name>`.
+- `along plugin install <git-url-or-path>` installs a plugin into
+  `~/.along/plugins/<manifest.name>` and enables that name in global settings.
 - Plugin settings entries are names, not arbitrary filesystem paths.
 - A plugin root must contain `.attention-plugin/plugin.json`.
 - `hooks/hooks.json` supports grouped hook JSON and Attention's legacy array form.
@@ -34,12 +34,12 @@ engine or compile an RTK-specific Go extension.
 ## Boundaries
 
 ### Allowed Changes
-- extension/**
 - internal/extension/**
 - internal/hook/**
 - internal/orchestrator/**
 - internal/tool/builtin/**
 - internal/resource/**
+- internal/plugin/**
 - cmd/along/**
 
 ### Forbidden
@@ -114,22 +114,19 @@ Scenario: missing plugin reports a diagnostic
   Then no source is returned
   And an error diagnostic identifies the missing plugin
 
-Scenario: bundled plugin source resolves from settings
-  Test: TestLoadBundledFilePluginFallback
-  Given settings include plugin "rtk-optimizer"
-  And no global plugin exists at `~/.along/plugins/rtk-optimizer`
-  And built-in plugin `extension/rtk-optimizer/.attention-plugin/plugin.json` exists
-  When the file plugin loader resolves settings
-  Then it returns the bundled plugin source
-  And it returns the bundled plugin `bin/` directory
+Scenario: local plugin install copies and enables
+  Test: TestInstallLocalPluginCopiesToGlobalDirAndEnables
+  Given a local plugin directory contains `.attention-plugin/plugin.json`
+  When `along plugin install <path>` installs it
+  Then it copies the plugin to `~/.along/plugins/<manifest.name>`
+  And global settings include that plugin name
 
-Scenario: global plugin overrides bundled plugin
-  Test: TestLoadGlobalPluginOverridesBundledPlugin
-  Given settings include plugin "rtk-optimizer"
-  And both global and bundled plugin directories exist
-  When the file plugin loader resolves settings
-  Then it loads `~/.along/plugins/rtk-optimizer`
-  And ignores the bundled plugin of the same name
+Scenario: git plugin install clones and enables
+  Test: TestInstallGitPluginClonesSource
+  Given an install source is not a local directory
+  When `along plugin install <source>` installs it
+  Then the installer runs `git clone --depth=1 <source>`
+  And global settings include the cloned plugin name
 
 Scenario: project plugin overrides global plugin
   Test: TestLoadProjectPluginOverridesGlobalPlugin

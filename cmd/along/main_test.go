@@ -247,6 +247,42 @@ func TestShutdownOrchestratorJoinsShutdownAndCloseErrors(t *testing.T) {
 	}
 }
 
+func TestRunPluginInstallCommandInstallsAndEnablesLocalPlugin(t *testing.T) {
+	root := t.TempDir()
+	agentDir := filepath.Join(root, config.AgentDirName)
+	source := filepath.Join(root, "source")
+	if err := os.MkdirAll(filepath.Join(source, ".attention-plugin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, ".attention-plugin", "plugin.json"), []byte(`{"name":"demo"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(config.EnvAgentDir, agentDir)
+
+	handled, err := runPluginCommand(context.Background(), []string{"plugin", "install", source})
+	if err != nil {
+		t.Fatalf("runPluginCommand: %v", err)
+	}
+	if !handled {
+		t.Fatal("runPluginCommand handled = false, want true")
+	}
+	if _, err := os.Stat(filepath.Join(root, "plugins", "demo", ".attention-plugin", "plugin.json")); err != nil {
+		t.Fatalf("installed plugin manifest: %v", err)
+	}
+
+	manager, err := config.NewManager(agentDir, t.TempDir())
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	global, err := manager.ScopeSettings(config.ScopeGlobal)
+	if err != nil {
+		t.Fatalf("ScopeSettings: %v", err)
+	}
+	if got := settingsStringSlice(global, "plugins"); !slices.Equal(got, []string{"demo"}) {
+		t.Fatalf("plugins = %#v, want [demo]", got)
+	}
+}
+
 func TestSettingsStringSliceCoercesJSONArray(t *testing.T) {
 	settings := config.Settings{
 		"paths": []any{"a", 1, "b", false, "c"},

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 
 	"github.com/cunninghamcard-bit/Attention/internal/config"
@@ -30,7 +29,6 @@ type pluginManifest struct {
 const (
 	settingsPluginsKey = "plugins"
 	userPluginDirName  = "plugins"
-	builtInPluginDir   = "extension"
 	manifestDir        = ".attention-plugin"
 	manifestFileName   = "plugin.json"
 	sourcePathPrefix   = "plugin:"
@@ -111,11 +109,8 @@ func loadOne(name string, agentDir string, cwd string) Result {
 }
 
 func pluginRoot(name string, agentDir string, cwd string) (string, error) {
-	if strings.TrimSpace(name) == "" {
-		return "", fmt.Errorf("plugin name is empty")
-	}
-	if strings.ContainsAny(name, `/\`) || strings.HasPrefix(name, ".") || strings.HasPrefix(name, "~") {
-		return "", fmt.Errorf("plugin name %q must be a name under a plugins directory", name)
+	if err := validatePluginName(name); err != nil {
+		return "", err
 	}
 	if agentDir == "" {
 		return "", fmt.Errorf("agent dir is empty")
@@ -129,7 +124,15 @@ func pluginRoot(name string, agentDir string, cwd string) (string, error) {
 	return filepath.Join(globalPluginDir(agentDir), name), nil
 }
 
-var bundledPluginDirs = defaultBundledPluginDirs
+func validatePluginName(name string) error {
+	if strings.TrimSpace(name) == "" {
+		return fmt.Errorf("plugin name is empty")
+	}
+	if strings.ContainsAny(name, `/\`) || strings.HasPrefix(name, ".") || strings.HasPrefix(name, "~") {
+		return fmt.Errorf("plugin name %q must be a name under a plugins directory", name)
+	}
+	return nil
+}
 
 func pluginSearchDirs(agentDir string, cwd string) []string {
 	dirs := []string{}
@@ -137,11 +140,6 @@ func pluginSearchDirs(agentDir string, cwd string) []string {
 		dirs = append(dirs, filepath.Join(cwd, config.ConfigDirName, userPluginDirName))
 	}
 	dirs = append(dirs, globalPluginDir(agentDir))
-	for _, dir := range bundledPluginDirs() {
-		if strings.TrimSpace(dir) != "" {
-			dirs = append(dirs, dir)
-		}
-	}
 	return uniqueCleanDirs(dirs)
 }
 
@@ -150,22 +148,6 @@ func globalPluginDir(agentDir string) string {
 		return filepath.Join(filepath.Dir(agentDir), userPluginDirName)
 	}
 	return filepath.Join(agentDir, userPluginDirName)
-}
-
-func defaultBundledPluginDirs() []string {
-	dirs := []string{}
-	if exe, err := os.Executable(); err == nil {
-		exeDir := filepath.Dir(exe)
-		dirs = append(dirs,
-			filepath.Join(exeDir, builtInPluginDir),
-			filepath.Join(exeDir, "..", builtInPluginDir),
-		)
-	}
-	if _, file, _, ok := runtime.Caller(0); ok {
-		repoRoot := filepath.Dir(filepath.Dir(filepath.Dir(file)))
-		dirs = append(dirs, filepath.Join(repoRoot, builtInPluginDir))
-	}
-	return dirs
 }
 
 func uniqueCleanDirs(dirs []string) []string {

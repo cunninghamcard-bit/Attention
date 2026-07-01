@@ -73,47 +73,6 @@ func TestLoadFilePluginSourcesHooksBinAndResources(t *testing.T) {
 	}
 }
 
-func TestLoadBundledFilePluginFallback(t *testing.T) {
-	agentDir := t.TempDir()
-	cwd := t.TempDir()
-	bundledDir := t.TempDir()
-	root := filepath.Join(bundledDir, "rtk-optimizer")
-	writePluginFixture(t, root)
-	withBundledPluginDirs(t, bundledDir)
-
-	result := Load(config.Settings{
-		settingsPluginsKey: []any{"rtk-optimizer"},
-	}, agentDir, cwd)
-	if len(result.Diagnostics) != 0 {
-		t.Fatalf("diagnostics = %#v, want none", result.Diagnostics)
-	}
-	if len(result.Sources) != 1 {
-		t.Fatalf("sources = %d, want 1", len(result.Sources))
-	}
-	if len(result.BinDirs) != 1 || result.BinDirs[0] != filepath.Join(root, binDirName) {
-		t.Fatalf("bin dirs = %#v, want bundled plugin bin", result.BinDirs)
-	}
-}
-
-func TestLoadGlobalPluginOverridesBundledPlugin(t *testing.T) {
-	rootDir := t.TempDir()
-	agentDir := filepath.Join(rootDir, config.AgentDirName)
-	cwd := t.TempDir()
-	bundledDir := t.TempDir()
-	globalRoot := filepath.Join(globalPluginDir(agentDir), "rtk-optimizer")
-	writePluginFixture(t, globalRoot)
-	writePluginFixture(t, filepath.Join(bundledDir, "rtk-optimizer"))
-	withBundledPluginDirs(t, bundledDir)
-
-	result := Load(config.Settings{settingsPluginsKey: []string{"rtk-optimizer"}}, agentDir, cwd)
-	if len(result.Diagnostics) != 0 {
-		t.Fatalf("diagnostics = %#v, want none", result.Diagnostics)
-	}
-	if len(result.BinDirs) != 1 || result.BinDirs[0] != filepath.Join(globalRoot, binDirName) {
-		t.Fatalf("bin dirs = %#v, want global plugin bin", result.BinDirs)
-	}
-}
-
 func TestLoadProjectPluginOverridesGlobalPlugin(t *testing.T) {
 	rootDir := t.TempDir()
 	agentDir := filepath.Join(rootDir, config.AgentDirName)
@@ -129,22 +88,6 @@ func TestLoadProjectPluginOverridesGlobalPlugin(t *testing.T) {
 	}
 	if len(result.BinDirs) != 1 || result.BinDirs[0] != filepath.Join(projectRoot, binDirName) {
 		t.Fatalf("bin dirs = %#v, want project plugin bin", result.BinDirs)
-	}
-}
-
-func TestLoadRepositoryBuiltInRtkOptimizer(t *testing.T) {
-	agentDir := t.TempDir()
-	cwd := t.TempDir()
-
-	result := Load(config.Settings{settingsPluginsKey: []string{"rtk-optimizer"}}, agentDir, cwd)
-	if len(result.Diagnostics) != 0 {
-		t.Fatalf("diagnostics = %#v, want none", result.Diagnostics)
-	}
-	if len(result.Sources) != 1 {
-		t.Fatalf("sources = %d, want built-in rtk optimizer source", len(result.Sources))
-	}
-	if result.Sources[0].Path != sourcePathPrefix+"rtk-optimizer" {
-		t.Fatalf("source path = %q, want rtk optimizer plugin source", result.Sources[0].Path)
 	}
 }
 
@@ -226,15 +169,4 @@ func mustWrite(t *testing.T, path string, content string) {
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
-}
-
-func withBundledPluginDirs(t *testing.T, dirs ...string) {
-	t.Helper()
-	old := bundledPluginDirs
-	bundledPluginDirs = func() []string {
-		return append([]string(nil), dirs...)
-	}
-	t.Cleanup(func() {
-		bundledPluginDirs = old
-	})
 }

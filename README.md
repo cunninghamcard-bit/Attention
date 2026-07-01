@@ -34,23 +34,25 @@ go build -o along ./cmd/along
 go test ./...
 ```
 
-## Built-in plugins
+## Plugins
 
-Attention ships repository plugins from `extension/<name>`. Enable one by name in
-settings, for example:
+Install a plugin from a git URL or local plugin directory:
+
+```sh
+along plugin install https://github.com/you/plugin.git
+```
+
+The installer copies or clones the plugin into `~/.along/plugins/<name>` and
+adds the plugin name to global settings:
 
 ```json
 {
-  "plugins": ["rtk-optimizer"]
+  "plugins": ["plugin-name"]
 }
 ```
 
-`make kernel` copies bundled plugins into `bin/extension` next to the built
-`along` binary.
-
 Project plugins at `.along/plugins/<name>` override global plugins at
-`~/.along/plugins/<name>`, and global plugins override bundled plugins with the
-same name.
+`~/.along/plugins/<name>`.
 
 Known test failures (all pre-existing at `a4702cc`, none are code regressions):
 - `internal/execenv/local` and `internal/resource` — macOS-only env quirks

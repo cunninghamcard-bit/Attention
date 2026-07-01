@@ -9,8 +9,6 @@ BIN := $(CURDIR)/bin
 kernel:
 	mkdir -p $(BIN)
 	go build -o $(BIN)/along ./cmd/along
-	rm -rf $(BIN)/extension
-	cp -R extension $(BIN)/extension
 tui: kernel
 	cd cmd/tui && go run . --along-path $(BIN)/along
 run: tui

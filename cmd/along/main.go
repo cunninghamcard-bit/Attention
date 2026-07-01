@@ -52,6 +52,10 @@ func main() {
 func run(ctx context.Context) error {
 	obs.Reset()
 
+	if handled, err := runPluginCommand(ctx, os.Args[1:]); handled {
+		return err
+	}
+
 	fs := flag.NewFlagSet("along", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	modelID := fs.String("model", "claude-sonnet-4-5", "model ID")

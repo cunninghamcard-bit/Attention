@@ -71,6 +71,20 @@ func (m *Manager) Settings() Settings {
 	return cloneSettings(m.merged)
 }
 
+func (m *Manager) ScopeSettings(scope Scope) (Settings, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	switch scope {
+	case ScopeGlobal:
+		return cloneSettings(m.global), nil
+	case ScopeProject:
+		return cloneSettings(m.project), nil
+	default:
+		return nil, fmt.Errorf("unknown settings scope %q", scope)
+	}
+}
+
 // Reload re-reads both scopes. A scope that fails to parse keeps its previous
 // in-memory settings and records the error, matching pi's reload
 // (settings-manager.ts:407-432).
