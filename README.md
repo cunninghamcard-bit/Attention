@@ -45,6 +45,9 @@ settings, for example:
 }
 ```
 
+`make kernel` copies bundled plugins into `bin/extension` next to the built
+`along` binary.
+
 Project plugins at `.along/plugins/<name>` override global plugins at
 `~/.along/plugins/<name>`, and global plugins override bundled plugins with the
 same name.
