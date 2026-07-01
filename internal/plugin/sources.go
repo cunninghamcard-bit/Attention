@@ -62,7 +62,7 @@ func Load(settings config.Settings, agentDir string, cwd string) Result {
 }
 
 func loadOne(name string, agentDir string, cwd string) Result {
-	root, err := pluginRoot(name, agentDir)
+	root, err := pluginRoot(name, agentDir, cwd)
 	if err != nil {
 		return pluginError(name, err)
 	}
@@ -110,17 +110,17 @@ func loadOne(name string, agentDir string, cwd string) Result {
 	}
 }
 
-func pluginRoot(name string, agentDir string) (string, error) {
+func pluginRoot(name string, agentDir string, cwd string) (string, error) {
 	if strings.TrimSpace(name) == "" {
 		return "", fmt.Errorf("plugin name is empty")
 	}
 	if strings.ContainsAny(name, `/\`) || strings.HasPrefix(name, ".") || strings.HasPrefix(name, "~") {
-		return "", fmt.Errorf("plugin name %q must be a name under the plugins directory", name)
+		return "", fmt.Errorf("plugin name %q must be a name under a plugins directory", name)
 	}
 	if agentDir == "" {
 		return "", fmt.Errorf("agent dir is empty")
 	}
-	for _, dir := range pluginSearchDirs(agentDir) {
+	for _, dir := range pluginSearchDirs(agentDir, cwd) {
 		root := filepath.Join(dir, name)
 		if manifestExists(root) {
 			return root, nil
@@ -131,8 +131,12 @@ func pluginRoot(name string, agentDir string) (string, error) {
 
 var bundledPluginDirs = defaultBundledPluginDirs
 
-func pluginSearchDirs(agentDir string) []string {
-	dirs := []string{filepath.Join(agentDir, userPluginDirName)}
+func pluginSearchDirs(agentDir string, cwd string) []string {
+	dirs := []string{}
+	if strings.TrimSpace(cwd) != "" {
+		dirs = append(dirs, filepath.Join(cwd, config.ConfigDirName, userPluginDirName))
+	}
+	dirs = append(dirs, filepath.Join(agentDir, userPluginDirName))
 	for _, dir := range bundledPluginDirs() {
 		if strings.TrimSpace(dir) != "" {
 			dirs = append(dirs, dir)

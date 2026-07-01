@@ -16,8 +16,9 @@ engine or compile an RTK-specific Go extension.
 ## Decisions
 
 - Enabled plugin names come from settings key `plugins`.
-- Named plugins resolve under `<agentDir>/plugins/<name>` first, then built-in
-  plugin directories shipped in Attention's repository `extension/<name>`.
+- Named plugins resolve under project `.along/plugins/<name>` first, then
+  `<agentDir>/plugins/<name>`, then built-in plugin directories shipped in
+  Attention's repository `extension/<name>`.
 - Plugin settings entries are names, not arbitrary filesystem paths.
 - A plugin root must contain `.attention-plugin/plugin.json`.
 - `hooks/hooks.json` supports grouped hook JSON and Attention's legacy array form.
@@ -128,3 +129,11 @@ Scenario: user plugin overrides bundled plugin
   When the file plugin loader resolves settings
   Then it loads `<agentDir>/plugins/rtk-optimizer`
   And ignores the bundled plugin of the same name
+
+Scenario: project plugin overrides user plugin
+  Test: TestLoadProjectPluginOverridesAgentPlugin
+  Given settings include plugin "rtk-optimizer"
+  And both project and user plugin directories exist
+  When the file plugin loader resolves settings
+  Then it loads `.along/plugins/rtk-optimizer`
+  And ignores the user plugin of the same name

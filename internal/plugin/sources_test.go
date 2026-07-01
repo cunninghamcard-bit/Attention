@@ -112,6 +112,23 @@ func TestLoadAgentPluginOverridesBundledPlugin(t *testing.T) {
 	}
 }
 
+func TestLoadProjectPluginOverridesAgentPlugin(t *testing.T) {
+	agentDir := t.TempDir()
+	cwd := t.TempDir()
+	agentRoot := filepath.Join(agentDir, userPluginDirName, "rtk-optimizer")
+	projectRoot := filepath.Join(cwd, config.ConfigDirName, userPluginDirName, "rtk-optimizer")
+	writePluginFixture(t, agentRoot)
+	writePluginFixture(t, projectRoot)
+
+	result := Load(config.Settings{settingsPluginsKey: []string{"rtk-optimizer"}}, agentDir, cwd)
+	if len(result.Diagnostics) != 0 {
+		t.Fatalf("diagnostics = %#v, want none", result.Diagnostics)
+	}
+	if len(result.BinDirs) != 1 || result.BinDirs[0] != filepath.Join(projectRoot, binDirName) {
+		t.Fatalf("bin dirs = %#v, want project plugin bin", result.BinDirs)
+	}
+}
+
 func TestLoadRepositoryBuiltInRtkOptimizer(t *testing.T) {
 	agentDir := t.TempDir()
 	cwd := t.TempDir()
