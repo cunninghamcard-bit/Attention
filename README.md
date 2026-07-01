@@ -45,8 +45,8 @@ settings, for example:
 }
 ```
 
-Project plugins at `.along/plugins/<name>` override user plugins at
-`<agentDir>/plugins/<name>`, and user plugins override bundled plugins with the
+Project plugins at `.along/plugins/<name>` override global plugins at
+`~/.along/plugins/<name>`, and global plugins override bundled plugins with the
 same name.
 
 Known test failures (all pre-existing at `a4702cc`, none are code regressions):

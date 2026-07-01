@@ -13,9 +13,10 @@ import (
 )
 
 func TestLoadFilePluginSourcesHooksBinAndResources(t *testing.T) {
-	agentDir := t.TempDir()
+	rootDir := t.TempDir()
+	agentDir := filepath.Join(rootDir, config.AgentDirName)
 	cwd := t.TempDir()
-	root := filepath.Join(agentDir, userPluginDirName, "rtk-optimizer")
+	root := filepath.Join(globalPluginDir(agentDir), "rtk-optimizer")
 	writePluginFixture(t, root)
 
 	result := Load(config.Settings{
@@ -94,12 +95,13 @@ func TestLoadBundledFilePluginFallback(t *testing.T) {
 	}
 }
 
-func TestLoadAgentPluginOverridesBundledPlugin(t *testing.T) {
-	agentDir := t.TempDir()
+func TestLoadGlobalPluginOverridesBundledPlugin(t *testing.T) {
+	rootDir := t.TempDir()
+	agentDir := filepath.Join(rootDir, config.AgentDirName)
 	cwd := t.TempDir()
 	bundledDir := t.TempDir()
-	agentRoot := filepath.Join(agentDir, userPluginDirName, "rtk-optimizer")
-	writePluginFixture(t, agentRoot)
+	globalRoot := filepath.Join(globalPluginDir(agentDir), "rtk-optimizer")
+	writePluginFixture(t, globalRoot)
 	writePluginFixture(t, filepath.Join(bundledDir, "rtk-optimizer"))
 	withBundledPluginDirs(t, bundledDir)
 
@@ -107,17 +109,18 @@ func TestLoadAgentPluginOverridesBundledPlugin(t *testing.T) {
 	if len(result.Diagnostics) != 0 {
 		t.Fatalf("diagnostics = %#v, want none", result.Diagnostics)
 	}
-	if len(result.BinDirs) != 1 || result.BinDirs[0] != filepath.Join(agentRoot, binDirName) {
-		t.Fatalf("bin dirs = %#v, want agent plugin bin", result.BinDirs)
+	if len(result.BinDirs) != 1 || result.BinDirs[0] != filepath.Join(globalRoot, binDirName) {
+		t.Fatalf("bin dirs = %#v, want global plugin bin", result.BinDirs)
 	}
 }
 
-func TestLoadProjectPluginOverridesAgentPlugin(t *testing.T) {
-	agentDir := t.TempDir()
+func TestLoadProjectPluginOverridesGlobalPlugin(t *testing.T) {
+	rootDir := t.TempDir()
+	agentDir := filepath.Join(rootDir, config.AgentDirName)
 	cwd := t.TempDir()
-	agentRoot := filepath.Join(agentDir, userPluginDirName, "rtk-optimizer")
+	globalRoot := filepath.Join(globalPluginDir(agentDir), "rtk-optimizer")
 	projectRoot := filepath.Join(cwd, config.ConfigDirName, userPluginDirName, "rtk-optimizer")
-	writePluginFixture(t, agentRoot)
+	writePluginFixture(t, globalRoot)
 	writePluginFixture(t, projectRoot)
 
 	result := Load(config.Settings{settingsPluginsKey: []string{"rtk-optimizer"}}, agentDir, cwd)
@@ -156,9 +159,10 @@ func TestLoadMissingFilePluginReportsDiagnostic(t *testing.T) {
 }
 
 func TestFilePluginSystemDoesNotAddTypeScriptRuntime(t *testing.T) {
-	agentDir := t.TempDir()
+	rootDir := t.TempDir()
+	agentDir := filepath.Join(rootDir, config.AgentDirName)
 	cwd := t.TempDir()
-	root := filepath.Join(agentDir, userPluginDirName, "ts-plugin")
+	root := filepath.Join(globalPluginDir(agentDir), "ts-plugin")
 	mustMkdir(t, filepath.Join(root, manifestDir))
 	mustWrite(t, filepath.Join(root, manifestDir, manifestFileName), `{"name":"ts-plugin"}`)
 	mustWrite(t, filepath.Join(root, "package.json"), `{"scripts":{"postinstall":"touch should-not-run"}}`)

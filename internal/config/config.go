@@ -18,6 +18,7 @@ import (
 
 const (
 	ConfigDirName = ".along"
+	AgentDirName  = "agent"
 
 	EnvAgentDir   = "ALONG_CODING_AGENT_DIR"
 	EnvSessionDir = "ALONG_CODING_AGENT_SESSION_DIR"
@@ -100,7 +101,7 @@ func AgentDir() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(homeDir, ConfigDirName, "agent"), nil
+	return filepath.Join(homeDir, ConfigDirName, AgentDirName), nil
 }
 
 func SessionDir() (string, error) {

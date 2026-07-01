@@ -126,7 +126,7 @@ func pluginRoot(name string, agentDir string, cwd string) (string, error) {
 			return root, nil
 		}
 	}
-	return filepath.Join(agentDir, userPluginDirName, name), nil
+	return filepath.Join(globalPluginDir(agentDir), name), nil
 }
 
 var bundledPluginDirs = defaultBundledPluginDirs
@@ -136,13 +136,20 @@ func pluginSearchDirs(agentDir string, cwd string) []string {
 	if strings.TrimSpace(cwd) != "" {
 		dirs = append(dirs, filepath.Join(cwd, config.ConfigDirName, userPluginDirName))
 	}
-	dirs = append(dirs, filepath.Join(agentDir, userPluginDirName))
+	dirs = append(dirs, globalPluginDir(agentDir))
 	for _, dir := range bundledPluginDirs() {
 		if strings.TrimSpace(dir) != "" {
 			dirs = append(dirs, dir)
 		}
 	}
 	return uniqueCleanDirs(dirs)
+}
+
+func globalPluginDir(agentDir string) string {
+	if filepath.Base(agentDir) == config.AgentDirName {
+		return filepath.Join(filepath.Dir(agentDir), userPluginDirName)
+	}
+	return filepath.Join(agentDir, userPluginDirName)
 }
 
 func defaultBundledPluginDirs() []string {

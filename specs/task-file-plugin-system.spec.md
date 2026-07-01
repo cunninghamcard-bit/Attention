@@ -17,8 +17,9 @@ engine or compile an RTK-specific Go extension.
 
 - Enabled plugin names come from settings key `plugins`.
 - Named plugins resolve under project `.along/plugins/<name>` first, then
-  `<agentDir>/plugins/<name>`, then built-in plugin directories shipped in
-  Attention's repository `extension/<name>`.
+  global `~/.along/plugins/<name>`, then built-in plugin directories shipped as
+  `extension/<name>` next to the installed binary. The source tree `extension/`
+  is a development fallback.
 - Plugin settings entries are names, not arbitrary filesystem paths.
 - A plugin root must contain `.attention-plugin/plugin.json`.
 - `hooks/hooks.json` supports grouped hook JSON and Attention's legacy array form.
@@ -59,7 +60,7 @@ engine or compile an RTK-specific Go extension.
 Scenario: file plugin source resolves from settings
   Test: TestLoadFilePluginSourcesHooksBinAndResources
   Given settings include plugin "rtk-optimizer"
-  And `<agentDir>/plugins/rtk-optimizer/.attention-plugin/plugin.json` exists
+  And `~/.along/plugins/rtk-optimizer/.attention-plugin/plugin.json` exists
   When the file plugin loader resolves settings
   Then it returns source path "plugin:rtk-optimizer"
   And it returns the plugin `bin/` directory
@@ -116,24 +117,24 @@ Scenario: missing plugin reports a diagnostic
 Scenario: bundled plugin source resolves from settings
   Test: TestLoadBundledFilePluginFallback
   Given settings include plugin "rtk-optimizer"
-  And no user plugin exists at `<agentDir>/plugins/rtk-optimizer`
+  And no global plugin exists at `~/.along/plugins/rtk-optimizer`
   And built-in plugin `extension/rtk-optimizer/.attention-plugin/plugin.json` exists
   When the file plugin loader resolves settings
   Then it returns the bundled plugin source
   And it returns the bundled plugin `bin/` directory
 
-Scenario: user plugin overrides bundled plugin
-  Test: TestLoadAgentPluginOverridesBundledPlugin
+Scenario: global plugin overrides bundled plugin
+  Test: TestLoadGlobalPluginOverridesBundledPlugin
   Given settings include plugin "rtk-optimizer"
-  And both user and bundled plugin directories exist
+  And both global and bundled plugin directories exist
   When the file plugin loader resolves settings
-  Then it loads `<agentDir>/plugins/rtk-optimizer`
+  Then it loads `~/.along/plugins/rtk-optimizer`
   And ignores the bundled plugin of the same name
 
-Scenario: project plugin overrides user plugin
-  Test: TestLoadProjectPluginOverridesAgentPlugin
+Scenario: project plugin overrides global plugin
+  Test: TestLoadProjectPluginOverridesGlobalPlugin
   Given settings include plugin "rtk-optimizer"
-  And both project and user plugin directories exist
+  And both project and global plugin directories exist
   When the file plugin loader resolves settings
   Then it loads `.along/plugins/rtk-optimizer`
-  And ignores the user plugin of the same name
+  And ignores the global plugin of the same name
