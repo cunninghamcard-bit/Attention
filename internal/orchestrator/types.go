@@ -1,5 +1,5 @@
-// Package orchestrator owns runtime state and assembles the session, hooks,
-// tools, extensions, and stateless harness into a mode-facing facade.
+// Package orchestrator owns mutable session state and assembles hooks, tools,
+// extensions, and the stateless harness into a mode-facing facade.
 package orchestrator
 
 import (
@@ -60,10 +60,8 @@ func (e *BusyError) Unwrap() error {
 	return ErrBusy
 }
 
-// ExtensionSource identifies an extension factory loaded during assembly.
-type ExtensionSource = extension.Source
-
-type ToolBuilder func(pluginBinDirs []string) ([]extension.ToolDefinition, error)
+// PluginSource identifies a plugin factory loaded during assembly.
+type PluginSource = extension.Source
 
 // NewOptions configures a fresh orchestrator session. If Session is nil, Repo
 // and CreateOptions are used to create a JSONL session.
@@ -87,14 +85,11 @@ type NewOptions struct {
 	Settings           config.Settings
 	SettingsManager    *config.Manager
 
-	Extensions []ExtensionSource
+	Plugins []PluginSource
 	// HooksPath points at a declarative shell-hooks file (hooks.json). A missing
 	// or empty file is a no-op.
 	HooksPath string
 	Tools     []extension.ToolDefinition
-	// ToolBuilder rebuilds the selected tool set on reload after plugin bin
-	// directories have been refreshed.
-	ToolBuilder ToolBuilder
 
 	PromptTemplates []resource.PromptTemplate
 	Skills          []resource.Skill
@@ -129,14 +124,11 @@ type OpenOptions struct {
 	Settings           config.Settings
 	SettingsManager    *config.Manager
 
-	Extensions []ExtensionSource
+	Plugins []PluginSource
 	// HooksPath points at a declarative shell-hooks file (hooks.json). A missing
 	// or empty file is a no-op.
 	HooksPath string
 	Tools     []extension.ToolDefinition
-	// ToolBuilder rebuilds the selected tool set on reload after plugin bin
-	// directories have been refreshed.
-	ToolBuilder ToolBuilder
 
 	PromptTemplates []resource.PromptTemplate
 	Skills          []resource.Skill
@@ -161,10 +153,10 @@ type runtimeConfig struct {
 	getAPIKey              func(ctx context.Context, provider string) (string, error)
 	settings               config.Settings
 	settingsManager        *config.Manager
-	extensions             []ExtensionSource
+	staticPluginSources    []PluginSource
+	filePluginSources      []PluginSource
 	hooksPath              string
 	tools                  []extension.ToolDefinition
-	toolBuilder            ToolBuilder
 	promptTemplates        []resource.PromptTemplate
 	skills                 []resource.Skill
 	promptPaths            []string

@@ -567,7 +567,7 @@ func (s *server) handleNavigateTree(ctx context.Context, cmd command) *response 
 }
 
 func (s *server) handleReload(ctx context.Context, cmd command) *response {
-	// Reload keybindings, extensions, skills, prompts, and themes via the
+	// Reload keybindings, plugins, skills, prompts, and themes via the
 	// orchestrator and return success with no data.
 	if err := s.target.ReloadSettings(ctx); err != nil {
 		return failure(cmd.ID, "reload", err.Error())

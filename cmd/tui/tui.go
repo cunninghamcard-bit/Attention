@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"charm.land/lipgloss/v2"
-	"github.com/charmbracelet/glamour"
 	"github.com/mattn/go-runewidth"
 
 	tea "charm.land/bubbletea/v2"
@@ -359,11 +358,7 @@ func Run(ctx context.Context, cfg Config) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	renderer, _ := glamour.NewTermRenderer(
-		glamour.WithAutoStyle(),
-		glamour.WithWordWrap(100),
-		glamour.WithEmoji(),
-	)
+	renderer := newMarkdownRenderer(100)
 
 	// Load persistent command history from ~/.pi-go/history.jsonl.
 	history := loadHistory()
@@ -1434,7 +1429,7 @@ func (m *model) handleResetCtrlCCount() (tea.Model, tea.Cmd) {
 //     (modeled on the branch popup) that drives the corresponding rpc on select.
 //   - skill / prompt: submitted as a prompt with the FULL verbatim "/..." text
 //     so the kernel expands and runs it.
-//   - extension: invoked through the kernel command dispatcher over rpc.
+//   - plugin: invoked through the kernel command dispatcher over rpc.
 //   - not found: the standard "Unknown command" warning.
 func (m *model) handleSlashCommand(text string) (tea.Model, tea.Cmd) {
 	m.inputModel.Clear()
@@ -1469,8 +1464,8 @@ func (m *model) handleSlashCommand(text string) (tea.Model, tea.Cmd) {
 		// The kernel expands and runs these. Submit the FULL verbatim "/..." text
 		// (e.g. "/skill:review") so ExpandSkillCommand / prompt expansion fires.
 		return m.submitPrompt(trimmed, nil)
-	case "extension":
-		return m.dispatchExtensionCommand(name, args)
+	case "plugin":
+		return m.dispatchPluginCommand(name, args)
 	case "builtin":
 		return m.dispatchBuiltin(name, args)
 	default:
@@ -1478,18 +1473,6 @@ func (m *model) handleSlashCommand(text string) (tea.Model, tea.Cmd) {
 		m.chatModel.AppendWarning(fmt.Sprintf("/%s has an unsupported command source %q", name, found.Source))
 		return m, nil
 	}
-}
-
-type extensionCommandDispatcher interface {
-	DispatchCommand(name, args string) (commandDispatchResult, error)
-}
-
-type reloadAgent interface {
-	Reload() (string, error)
-}
-
-type commandListAgent interface {
-	FetchCommands() []CommandInfo
 }
 
 func skillsFromCommands(commands []CommandInfo) []Skill {
@@ -1507,21 +1490,12 @@ func skillsFromCommands(commands []CommandInfo) []Skill {
 	return skills
 }
 
-func (m *model) replaceCommands(commands []CommandInfo) {
-	m.cfg.Commands = commands
-	m.inputModel.Commands = commands
-	skills := skillsFromCommands(commands)
-	m.cfg.Skills = skills
-	m.inputModel.Skills = skills
-}
-
-func (m *model) dispatchExtensionCommand(name, args string) (tea.Model, tea.Cmd) {
-	agent, ok := m.cfg.Agent.(extensionCommandDispatcher)
-	if !ok {
+func (m *model) dispatchPluginCommand(name, args string) (tea.Model, tea.Cmd) {
+	if m.cfg.Agent == nil {
 		m.chatModel.AppendWarning(fmt.Sprintf("/%s is not available (no kernel backend)", name))
 		return m, nil
 	}
-	result, err := agent.DispatchCommand(name, args)
+	result, err := m.cfg.Agent.DispatchCommand(name, args)
 	if err != nil {
 		m.chatModel.AppendWarning(fmt.Sprintf("/%s failed: %v", name, err))
 		return m, nil
@@ -1545,22 +1519,23 @@ func (m *model) dispatchExtensionCommand(name, args string) (tea.Model, tea.Cmd)
 // picker that drives the corresponding rpc when the user selects a row.
 func (m *model) dispatchBuiltin(name, args string) (tea.Model, tea.Cmd) {
 	if name == "reload" {
-		agent, ok := m.cfg.Agent.(reloadAgent)
-		if !ok {
+		if m.cfg.Agent == nil {
 			m.chatModel.AppendWarning(fmt.Sprintf("/%s is not available (no kernel backend)", name))
 			return m, nil
 		}
-		notice, err := agent.Reload()
+		notice, err := m.cfg.Agent.Reload()
 		if err != nil {
 			m.chatModel.AppendWarning(fmt.Sprintf("/%s failed: %v", name, err))
 			return m, nil
 		}
-		if fetcher, ok := m.cfg.Agent.(commandListAgent); ok {
-			if commands := fetcher.FetchCommands(); commands != nil {
-				m.replaceCommands(commands)
-			} else {
-				m.chatModel.AppendWarning("Reloaded, but command list refresh failed.")
-			}
+		if commands := m.cfg.Agent.FetchCommands(); commands != nil {
+			m.cfg.Commands = commands
+			m.inputModel.Commands = commands
+			skills := skillsFromCommands(commands)
+			m.cfg.Skills = skills
+			m.inputModel.Skills = skills
+		} else {
+			m.chatModel.AppendWarning("Reloaded, but command list refresh failed.")
 		}
 		m.chatModel.AppendNotice(notice)
 		return m, nil

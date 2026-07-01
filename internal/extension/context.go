@@ -51,6 +51,7 @@ type ModelInfo struct {
 type ExtensionContext struct {
 	Cwd                string
 	SessionID          string
+	PluginBinDirs      []string
 	Session            ReadonlySessionView
 	ModelRegistry      func() []ModelInfo
 	Model              func() ai.Model

@@ -692,7 +692,7 @@ func TestServeGetCommandsResponseShape(t *testing.T) {
 			{
 				Name:         "run",
 				ArgumentHint: "[args]",
-				Source:       "extension",
+				Source:       "plugin",
 			},
 			{
 				Name:        "deploy",
@@ -722,16 +722,16 @@ func TestServeGetCommandsResponseShape(t *testing.T) {
 		t.Fatalf("commands len = %d, want 2: %v", len(commands), commands)
 	}
 
-	extensionCommand := commands[0].(map[string]any)
-	if extensionCommand["name"] != "run" || extensionCommand["source"] != "extension" {
-		t.Fatalf("extension command = %v", extensionCommand)
+	pluginCommand := commands[0].(map[string]any)
+	if pluginCommand["name"] != "run" || pluginCommand["source"] != "plugin" {
+		t.Fatalf("plugin command = %v", pluginCommand)
 	}
-	if extensionCommand["argumentHint"] != "[args]" {
-		t.Fatalf("extension command argumentHint = %v, want [args]", extensionCommand["argumentHint"])
+	if pluginCommand["argumentHint"] != "[args]" {
+		t.Fatalf("plugin command argumentHint = %v, want [args]", pluginCommand["argumentHint"])
 	}
-	extensionSourceInfo := extensionCommand["sourceInfo"].(map[string]any)
-	if extensionSourceInfo["kind"] != "" || extensionSourceInfo["path"] != "" {
-		t.Fatalf("extension sourceInfo = %v, want zero along source info", extensionSourceInfo)
+	pluginSourceInfo := pluginCommand["sourceInfo"].(map[string]any)
+	if pluginSourceInfo["kind"] != "" || pluginSourceInfo["path"] != "" {
+		t.Fatalf("plugin sourceInfo = %v, want zero along source info", pluginSourceInfo)
 	}
 
 	promptCommand := commands[1].(map[string]any)

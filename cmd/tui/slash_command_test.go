@@ -55,10 +55,10 @@ func (a *slashCommandAgent) FetchCommands() []CommandInfo {
 	return append([]CommandInfo(nil), a.fetchedCommands...)
 }
 
-func TestTUIDispatchesExtensionCommandOverRPC(t *testing.T) {
+func TestTUIDispatchesPluginCommandOverRPC(t *testing.T) {
 	agent := &slashCommandAgent{
 		dispatchNotifications: []commandNotification{
-			{Message: "ran extension", Level: "info"},
+			{Message: "ran plugin", Level: "info"},
 			{Message: "careful", Level: "warning"},
 		},
 	}
@@ -66,7 +66,7 @@ func TestTUIDispatchesExtensionCommandOverRPC(t *testing.T) {
 		cfg: Config{
 			Agent: agent,
 			Commands: []CommandInfo{
-				{Name: "plugin-run", Source: "extension"},
+				{Name: "plugin-run", Source: "plugin"},
 			},
 		},
 		inputModel: NewInputModel(nil, nil, nil, nil, ""),
@@ -74,7 +74,7 @@ func TestTUIDispatchesExtensionCommandOverRPC(t *testing.T) {
 
 	got, cmd := m.handleSlashCommand(`/plugin-run one "two words"`)
 	if cmd != nil {
-		t.Fatal("handleSlashCommand returned prompt command, want synchronous extension dispatch")
+		t.Fatal("handleSlashCommand returned prompt command, want synchronous plugin dispatch")
 	}
 	if _, ok := got.(tea.Model); !ok {
 		t.Fatalf("returned model = %T, want tea.Model", got)
@@ -83,9 +83,9 @@ func TestTUIDispatchesExtensionCommandOverRPC(t *testing.T) {
 		t.Fatalf("dispatch = %q %q, want plugin-run args", agent.dispatchName, agent.dispatchArgs)
 	}
 	if len(m.chatModel.Messages) != 2 {
-		t.Fatalf("chat messages len = %d, want extension notifications", len(m.chatModel.Messages))
+		t.Fatalf("chat messages len = %d, want plugin notifications", len(m.chatModel.Messages))
 	}
-	if msg := m.chatModel.Messages[0]; msg.role != "assistant" || msg.content != "ran extension" || msg.isWarning {
+	if msg := m.chatModel.Messages[0]; msg.role != "assistant" || msg.content != "ran plugin" || msg.isWarning {
 		t.Fatalf("notice message = %#v", msg)
 	}
 	if msg := m.chatModel.Messages[1]; msg.role != "assistant" || msg.content != "careful" || !msg.isWarning {
@@ -98,7 +98,7 @@ func TestTUIReloadRefreshesCommandList(t *testing.T) {
 		reloadNotice: "Reloaded.",
 		fetchedCommands: []CommandInfo{
 			{Name: "reload", Source: "builtin"},
-			{Name: "rtk", Source: "extension"},
+			{Name: "rtk", Source: "plugin"},
 			{Name: "skill:review", Description: "Review code", Source: "skill"},
 		},
 	}

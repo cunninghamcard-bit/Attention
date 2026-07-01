@@ -620,6 +620,39 @@ func TestBashToolPrependsPluginBinDirs(t *testing.T) {
 	}
 }
 
+func TestBashToolReadsPluginBinDirsFromExtensionContext(t *testing.T) {
+	t.Parallel()
+
+	if runtime.GOOS == "windows" {
+		t.Skip("plugin bin test uses POSIX shell")
+	}
+
+	ctx := context.Background()
+	env := local.New(t.TempDir())
+	binDir := t.TempDir()
+	toolPath := filepath.Join(binDir, "plugin-ctx")
+	if err := os.WriteFile(toolPath, []byte("#!/bin/sh\nprintf 'from-context\\n'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(toolPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := executeToolWithContext(
+		ctx,
+		builtin.NewBashTool(env, ""),
+		map[string]any{"command": "plugin-ctx"},
+		nil,
+		extension.ExtensionContext{PluginBinDirs: []string{binDir}},
+	)
+	if err != nil {
+		t.Fatalf("bash Execute returned Go error: %v", err)
+	}
+	if got := resultText(t, result); got != "from-context\n" {
+		t.Fatalf("bash text = %q, want plugin bin command output", got)
+	}
+}
+
 func TestBashToolTruncatesLongOutput(t *testing.T) {
 	t.Parallel()
 

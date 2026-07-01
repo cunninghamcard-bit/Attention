@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cunninghamcard-bit/Attention/internal/extension"
 	"github.com/cunninghamcard-bit/Attention/internal/agentloop"
 	"github.com/cunninghamcard-bit/Attention/internal/ai"
+	"github.com/cunninghamcard-bit/Attention/internal/extension"
 	"github.com/cunninghamcard-bit/Attention/internal/hook"
 	"github.com/cunninghamcard-bit/Attention/internal/session"
 )
@@ -209,7 +209,7 @@ func TestForkBeforeUserEntryAndCloneAtLeaf(t *testing.T) {
 func TestForkCanBeCancelledByExtensionBeforeCreatingSession(t *testing.T) {
 	ctx := context.Background()
 	var sawEvent bool
-	o, repo := newTestOrchestrator(t, []ExtensionSource{
+	o, repo := newTestOrchestrator(t, []PluginSource{
 		{
 			Path: "cancel-fork",
 			Factory: func(api extension.ExtensionAPI) error {
@@ -517,4 +517,3 @@ func slicesEqual(a, b []string) bool {
 	}
 	return true
 }
-

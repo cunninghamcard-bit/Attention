@@ -13,6 +13,7 @@ import (
 	"github.com/cunninghamcard-bit/Attention/internal/extension"
 	"github.com/cunninghamcard-bit/Attention/internal/harness"
 	"github.com/cunninghamcard-bit/Attention/internal/message"
+	"github.com/cunninghamcard-bit/Attention/internal/plugin"
 	"github.com/cunninghamcard-bit/Attention/internal/provider"
 	"github.com/cunninghamcard-bit/Attention/internal/resource"
 	"github.com/cunninghamcard-bit/Attention/internal/session"
@@ -23,25 +24,25 @@ var (
 	extensionShutdownCallback = func() {}
 )
 
-func (o *Orchestrator) bindExtensionCommands(ext extension.Extension) error {
+func (o *Orchestrator) bindPluginCommands(ext extension.Extension) error {
 	for name, def := range ext.Commands {
 		if _, exists := o.commands[name]; exists {
 			return fmt.Errorf("orchestrator: duplicate command %q", name)
 		}
 		if def.Source == (resource.SourceInfo{}) {
-			def.Source = extensionCommandSource(ext.Path)
+			def.Source = pluginCommandSource(ext.Path)
 		}
 		o.commands[name] = def
 	}
 	return nil
 }
 
-func extensionCommandSource(path string) resource.SourceInfo {
+func pluginCommandSource(path string) resource.SourceInfo {
 	if path == "" {
 		return resource.SourceInfo{}
 	}
 	return resource.SourceInfo{
-		Kind: resource.SourceKind("extension"),
+		Kind: resource.SourceKind("plugin"),
 		Path: path,
 	}
 }
@@ -187,9 +188,10 @@ func (o *Orchestrator) extensionContext(ctx context.Context) extension.Extension
 	}
 
 	return extension.ExtensionContext{
-		Cwd:       o.extensionCwd(),
-		SessionID: o.session.GetMetadata().ID,
-		Session:   readonlySessionView{session: o.session},
+		Cwd:           o.extensionCwd(),
+		SessionID:     o.session.GetMetadata().ID,
+		PluginBinDirs: plugin.BinDirs(o.pluginSources),
+		Session:       readonlySessionView{session: o.session},
 		ModelRegistry: func() []extension.ModelInfo {
 			return extensionModelInfos(o.AvailableModels(ctx))
 		},

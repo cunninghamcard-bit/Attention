@@ -773,7 +773,7 @@ func TestExtensionToolOverridesBuiltinDefinition(t *testing.T) {
 		Provider:      testProviderRegistry(testModel("initial-model")),
 		ThinkingLevel: agentloop.ThinkingOff,
 		Tools:         []extension.ToolDefinition{baseRead},
-		Extensions: []ExtensionSource{{
+		Plugins: []PluginSource{{
 			Path: "override",
 			Factory: func(api extension.ExtensionAPI) error {
 				api.RegisterTool(overrideRead)
@@ -814,7 +814,7 @@ func TestSlashCommandsPrependsBuiltinsAndAggregatesExtensionTemplatesAndSkills(t
 	promptSource := resource.NewSourceInfo(resource.SourceProject, "/project/prompts/deploy.md", "/project/prompts")
 	skillSource := resource.NewSourceInfo(resource.SourceUser, "/agent/skills/review/SKILL.md", "/agent/skills/review")
 	extensionSource := resource.SourceInfo{
-		Kind: resource.SourceKind("extension"),
+		Kind: resource.SourceKind("plugin"),
 		Path: "commands",
 	}
 
@@ -824,7 +824,7 @@ func TestSlashCommandsPrependsBuiltinsAndAggregatesExtensionTemplatesAndSkills(t
 		ModelID:       "initial-model",
 		Provider:      testProviderRegistry(testModel("initial-model")),
 		ThinkingLevel: agentloop.ThinkingOff,
-		Extensions: []ExtensionSource{
+		Plugins: []PluginSource{
 			{
 				Path: "commands",
 				Factory: func(api extension.ExtensionAPI) error {
@@ -880,7 +880,7 @@ func TestSlashCommandsPrependsBuiltinsAndAggregatesExtensionTemplatesAndSkills(t
 		"Start a new session",
 		"Manually compact the session context",
 		"Resume a different session",
-		"Reload keybindings, extensions, skills, prompts, and themes",
+		"Reload keybindings, plugins, skills, prompts, and themes",
 	}
 	if len(wantBuiltinNames) != len(wantBuiltinDescriptions) {
 		t.Fatalf("test setup mismatch: names %d descriptions %d", len(wantBuiltinNames), len(wantBuiltinDescriptions))
@@ -908,7 +908,7 @@ func TestSlashCommandsPrependsBuiltinsAndAggregatesExtensionTemplatesAndSkills(t
 
 	extensionPromptSkill := got[len(wantBuiltinNames):]
 	wantNames := []string{"alpha", "zeta", "deploy", "skill:review"}
-	wantSources := []string{"extension", "extension", "prompt", "skill"}
+	wantSources := []string{"plugin", "plugin", "prompt", "skill"}
 	wantDescriptions := []string{"Run alpha", "Run zeta", "Deploy app", "Review changes"}
 	for i := range extensionPromptSkill {
 		if extensionPromptSkill[i].Name != wantNames[i] ||
@@ -948,7 +948,7 @@ func TestFilePluginHookCommandDoesNotBreakStartup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadShellHooksData: %v", err)
 	}
-	o, _ := newTestOrchestrator(t, []ExtensionSource{{
+	o, _ := newTestOrchestrator(t, []PluginSource{{
 		Path: "plugin:lazy-hook",
 		Factory: func(api extension.ExtensionAPI) error {
 			for _, handler := range runner.Handlers() {
@@ -1061,7 +1061,7 @@ func TestResourcesDiscoverLoadsSkillsAndPromptsFromAllHandlers(t *testing.T) {
 		ModelID:       "initial-model",
 		Provider:      testProviderRegistry(testModel("initial-model")),
 		ThinkingLevel: agentloop.ThinkingOff,
-		Extensions: []ExtensionSource{
+		Plugins: []PluginSource{
 			{
 				Path: "resources",
 				Factory: func(api extension.ExtensionAPI) error {
@@ -1302,7 +1302,61 @@ func TestReloadSettingsLoadsNewlyEnabledFilePlugin(t *testing.T) {
 	}
 }
 
-func TestReloadSettingsRebuildsToolsWithNewPluginBinDirs(t *testing.T) {
+func TestNewLoadsEnabledFilePlugin(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	agentDir := filepath.Join(root, config.AgentDirName)
+	cwd := filepath.Join(root, "project")
+	if err := os.MkdirAll(agentDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(cwd, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	pluginRoot := filepath.Join(root, "plugins", "startup-plugin")
+	if err := os.MkdirAll(filepath.Join(pluginRoot, ".attention-plugin"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(pluginRoot, ".attention-plugin", "plugin.json"),
+		[]byte(`{"name":"startup-plugin"}`),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	writePluginHandlerCommand(t, pluginRoot, "startup-command", "Run startup handler")
+
+	settingsPath := filepath.Join(agentDir, "settings.json")
+	writeSettingsFile(t, settingsPath, `{"plugins":["startup-plugin"]}`)
+	manager, err := config.NewManager(agentDir, cwd)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+
+	repo := session.NewJsonlSessionRepo(t.TempDir())
+	o, err := New(ctx, NewOptions{
+		Repo:            repo,
+		CreateOptions:   session.JsonlSessionCreateOptions{CWD: cwd},
+		ModelID:         "initial-model",
+		Provider:        testProviderRegistry(testModel("initial-model")),
+		ThinkingLevel:   agentloop.ThinkingOff,
+		Settings:        manager.Settings(),
+		SettingsManager: manager,
+		AgentDir:        agentDir,
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if !hasSlashCommandNamed(o.SlashCommands(), "startup-command") {
+		t.Fatalf("SlashCommands missing startup-command: %#v", o.SlashCommands())
+	}
+	wantBin := filepath.Join(pluginRoot, "bin")
+	if !slices.Equal(o.extensionContext(ctx).PluginBinDirs, []string{wantBin}) {
+		t.Fatalf("extension context plugin bins = %#v, want [%s]", o.extensionContext(ctx).PluginBinDirs, wantBin)
+	}
+}
+
+func TestReloadSettingsUpdatesPluginBinDirs(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
 	agentDir := filepath.Join(root, config.AgentDirName)
@@ -1320,7 +1374,6 @@ func TestReloadSettingsRebuildsToolsWithNewPluginBinDirs(t *testing.T) {
 		t.Fatalf("NewManager: %v", err)
 	}
 
-	var reloadBinDirs [][]string
 	repo := session.NewJsonlSessionRepo(t.TempDir())
 	o, err := New(ctx, NewOptions{
 		Repo:            repo,
@@ -1331,22 +1384,6 @@ func TestReloadSettingsRebuildsToolsWithNewPluginBinDirs(t *testing.T) {
 		Settings:        manager.Settings(),
 		SettingsManager: manager,
 		AgentDir:        agentDir,
-		ToolBuilder: func(binDirs []string) ([]extension.ToolDefinition, error) {
-			reloadBinDirs = append(reloadBinDirs, append([]string(nil), binDirs...))
-			return []extension.ToolDefinition{{
-				Name:          "bash",
-				Description:   "Bash",
-				PromptSnippet: strings.Join(binDirs, string(os.PathListSeparator)),
-				Execute: func(
-					context.Context,
-					extension.ToolCall,
-					tool.UpdateCallback,
-					extension.ExtensionContext,
-				) (tool.Result, error) {
-					return tool.Result{}, nil
-				},
-			}}, nil
-		},
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -1372,11 +1409,8 @@ func TestReloadSettingsRebuildsToolsWithNewPluginBinDirs(t *testing.T) {
 		t.Fatalf("ReloadSettings: %v", err)
 	}
 	wantBin := filepath.Join(pluginRoot, "bin")
-	if len(reloadBinDirs) != 1 || !slices.Equal(reloadBinDirs[0], []string{wantBin}) {
-		t.Fatalf("reload bin dirs = %#v, want [[%s]]", reloadBinDirs, wantBin)
-	}
-	if len(o.baseToolDefs) != 1 || !strings.Contains(o.baseToolDefs[0].PromptSnippet, wantBin) {
-		t.Fatalf("baseToolDefs = %#v, want rebuilt tool with plugin bin", o.baseToolDefs)
+	if !slices.Equal(o.extensionContext(ctx).PluginBinDirs, []string{wantBin}) {
+		t.Fatalf("extension context plugin bins = %#v, want [%s]", o.extensionContext(ctx).PluginBinDirs, wantBin)
 	}
 }
 
@@ -1394,7 +1428,7 @@ func TestReloadSettingsEmitsResourcesDiscoverReasonReload(t *testing.T) {
 		Provider:      testProviderRegistry(testModel("initial-model")),
 		ThinkingLevel: agentloop.ThinkingOff,
 		AgentDir:      agentDir,
-		Extensions: []ExtensionSource{
+		Plugins: []PluginSource{
 			{
 				Path: "resources",
 				Factory: func(api extension.ExtensionAPI) error {
@@ -1458,7 +1492,7 @@ func TestReloadSettingsRebuildsExtensionToolRuntime(t *testing.T) {
 		Provider:      testProviderRegistry(testModel("initial-model")),
 		ThinkingLevel: agentloop.ThinkingOff,
 		Tools:         []extension.ToolDefinition{baseRead},
-		Extensions: []ExtensionSource{{
+		Plugins: []PluginSource{{
 			Path: "tool-reload",
 			Factory: func(api extension.ExtensionAPI) error {
 				loads++
@@ -1517,7 +1551,7 @@ func TestReloadSettingsResetsExtensionProviders(t *testing.T) {
 		ModelID:       "initial-model",
 		Provider:      testProviderRegistry(testModel("initial-model")),
 		ThinkingLevel: agentloop.ThinkingOff,
-		Extensions: []ExtensionSource{{
+		Plugins: []PluginSource{{
 			Path: "provider-reload",
 			Factory: func(api extension.ExtensionAPI) error {
 				loads++
@@ -1565,7 +1599,7 @@ func TestResourcesDiscoverThemeOnlyDoesNotChangeResources(t *testing.T) {
 		ModelID:       "initial-model",
 		Provider:      testProviderRegistry(testModel("initial-model")),
 		ThinkingLevel: agentloop.ThinkingOff,
-		Extensions: []ExtensionSource{
+		Plugins: []PluginSource{
 			{
 				Path: "theme-only",
 				Factory: func(api extension.ExtensionAPI) error {
@@ -1965,7 +1999,7 @@ func TestSubscribeTranslatesLifecycleEvents(t *testing.T) {
 func TestCompletionCriteriaToolExecutionUpdateMutationPublishesFinalEvent(t *testing.T) {
 	ctx := context.Background()
 	patched := map[string]any{"stdout": "patched"}
-	o, _ := newTestOrchestrator(t, []ExtensionSource{{
+	o, _ := newTestOrchestrator(t, []PluginSource{{
 		Path: "mutate-update",
 		Factory: func(api extension.ExtensionAPI) error {
 			api.On(hook.EventToolExecutionUpdate, func(_ context.Context, event any, _ extension.ExtensionContext) (any, error) {
@@ -2006,7 +2040,7 @@ func TestCompletionCriteriaToolExecutionUpdateMutationPublishesFinalEvent(t *tes
 func TestCompletionCriteriaToolExecutionEndMutationPublishesFinalEvent(t *testing.T) {
 	ctx := context.Background()
 	patchedResult := map[string]any{"stdout": "scrubbed"}
-	o, _ := newTestOrchestrator(t, []ExtensionSource{{
+	o, _ := newTestOrchestrator(t, []PluginSource{{
 		Path: "mutate-end",
 		Factory: func(api extension.ExtensionAPI) error {
 			api.On(hook.EventToolExecutionEnd, func(_ context.Context, event any, _ extension.ExtensionContext) (any, error) {
@@ -2050,7 +2084,7 @@ func TestCompletionCriteriaToolExecutionMutationHandlersComposeAndErrorsDoNotBlo
 	ctx := context.Background()
 	hookErr := errors.New("patch failed")
 	var secondSawFirst bool
-	o, _ := newTestOrchestrator(t, []ExtensionSource{{
+	o, _ := newTestOrchestrator(t, []PluginSource{{
 		Path: "compose-update",
 		Factory: func(api extension.ExtensionAPI) error {
 			api.On(hook.EventToolExecutionUpdate, func(_ context.Context, event any, _ extension.ExtensionContext) (any, error) {
@@ -2110,7 +2144,7 @@ func TestCompletionCriteriaToolExecutionMutationHandlersComposeAndErrorsDoNotBlo
 
 func TestCompletionCriteriaToolExecutionPublisherRunsAfterNativeHandlers(t *testing.T) {
 	ctx := context.Background()
-	o, _ := newTestOrchestrator(t, []ExtensionSource{{
+	o, _ := newTestOrchestrator(t, []PluginSource{{
 		Path: "publisher-last",
 		Factory: func(api extension.ExtensionAPI) error {
 			api.On(hook.EventToolExecutionStart, func(context.Context, any, extension.ExtensionContext) (any, error) {
@@ -3353,7 +3387,7 @@ func TestDispatchCommandRoutesToRegisteredHandler(t *testing.T) {
 	var gotArgs []string
 	var gotModel ai.Model
 	var gotIdle bool
-	o, _ := newTestOrchestrator(t, []ExtensionSource{
+	o, _ := newTestOrchestrator(t, []PluginSource{
 		{
 			Path: "commands",
 			Factory: func(api extension.ExtensionAPI) error {
@@ -3466,7 +3500,7 @@ func TestDuplicateCommandNameFailsAssembly(t *testing.T) {
 		CreateOptions: session.JsonlSessionCreateOptions{CWD: cwd},
 		ModelID:       "initial-model",
 		Provider:      testProviderRegistry(testModel("initial-model")),
-		Extensions: []ExtensionSource{
+		Plugins: []PluginSource{
 			{
 				Path: "first",
 				Factory: func(api extension.ExtensionAPI) error {
@@ -3531,7 +3565,7 @@ func TestExtensionProviderRegistersBeforeModelResolution(t *testing.T) {
 		CreateOptions: session.JsonlSessionCreateOptions{CWD: cwd},
 		ModelID:       "local-gpt-5.5",
 		Provider:      testProviderRegistry(),
-		Extensions: []ExtensionSource{
+		Plugins: []PluginSource{
 			{
 				Path: "provider",
 				Factory: func(api extension.ExtensionAPI) error {
@@ -3580,7 +3614,7 @@ func TestExtensionOAuthProviderRegistersBeforeModelResolution(t *testing.T) {
 		CreateOptions: session.JsonlSessionCreateOptions{CWD: cwd},
 		ModelID:       "local-oauth-gpt",
 		Provider:      testProviderRegistry(),
-		Extensions: []ExtensionSource{
+		Plugins: []PluginSource{
 			{
 				Path: "oauth-provider",
 				Factory: func(api extension.ExtensionAPI) error {
@@ -3913,7 +3947,7 @@ func assertQueueUpdate(t *testing.T, ev Event, steering []string, followUp []str
 	}
 }
 
-func newTestOrchestrator(t *testing.T, extensions []ExtensionSource) (*Orchestrator, *session.JsonlSessionRepo) {
+func newTestOrchestrator(t *testing.T, extensions []PluginSource) (*Orchestrator, *session.JsonlSessionRepo) {
 	t.Helper()
 
 	ctx := context.Background()
@@ -3928,7 +3962,7 @@ func newTestOrchestrator(t *testing.T, extensions []ExtensionSource) (*Orchestra
 			testModel("fallback"),
 		),
 		ThinkingLevel: agentloop.ThinkingOff,
-		Extensions:    extensions,
+		Plugins:       extensions,
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)

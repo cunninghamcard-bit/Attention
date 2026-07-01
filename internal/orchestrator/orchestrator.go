@@ -49,8 +49,8 @@ type Orchestrator struct {
 	tools               []tool.Tool
 	toolDefs            []extension.ToolDefinition
 	baseToolDefs        []extension.ToolDefinition
-	toolBuilder         ToolBuilder
-	extensions          []ExtensionSource
+	staticPluginSources []PluginSource
+	pluginSources       []PluginSource
 	hooksPath           string
 	commands            map[string]extension.CommandDefinition
 	customSystemPrompt  string
@@ -213,30 +213,30 @@ func New(ctx context.Context, opts NewOptions) (*Orchestrator, error) {
 	}
 
 	cfg := runtimeConfig{
-		model:              opts.Model,
-		modelID:            opts.ModelID,
-		modelProvider:      opts.ModelProvider,
-		provider:           opts.Provider,
-		repo:               opts.Repo,
-		thinkingLevel:      opts.ThinkingLevel,
-		systemPrompt:       opts.SystemPrompt,
-		appendSystemPrompt: opts.AppendSystemPrompt,
-		getAPIKey:          opts.GetAPIKey,
-		settings:           cloneSettings(opts.Settings),
-		settingsManager:    opts.SettingsManager,
-		extensions:         opts.Extensions,
-		hooksPath:          opts.HooksPath,
-		tools:              opts.Tools,
-		toolBuilder:        opts.ToolBuilder,
-		promptTemplates:    opts.PromptTemplates,
-		skills:             opts.Skills,
-		promptPaths:        append([]string(nil), opts.PromptPaths...),
-		skillPaths:         append([]string(nil), opts.SkillPaths...),
-		agentDir:           opts.AgentDir,
-		contextFiles:       opts.ContextFiles,
-		diagnostics:        append([]resource.ResourceDiagnostic(nil), opts.Diagnostics...),
-		executionEnv:       opts.ExecutionEnv,
+		model:               opts.Model,
+		modelID:             opts.ModelID,
+		modelProvider:       opts.ModelProvider,
+		provider:            opts.Provider,
+		repo:                opts.Repo,
+		thinkingLevel:       opts.ThinkingLevel,
+		systemPrompt:        opts.SystemPrompt,
+		appendSystemPrompt:  opts.AppendSystemPrompt,
+		getAPIKey:           opts.GetAPIKey,
+		settings:            cloneSettings(opts.Settings),
+		settingsManager:     opts.SettingsManager,
+		staticPluginSources: opts.Plugins,
+		hooksPath:           opts.HooksPath,
+		tools:               opts.Tools,
+		promptTemplates:     opts.PromptTemplates,
+		skills:              opts.Skills,
+		promptPaths:         append([]string(nil), opts.PromptPaths...),
+		skillPaths:          append([]string(nil), opts.SkillPaths...),
+		agentDir:            opts.AgentDir,
+		contextFiles:        opts.ContextFiles,
+		diagnostics:         append([]resource.ResourceDiagnostic(nil), opts.Diagnostics...),
+		executionEnv:        opts.ExecutionEnv,
 	}
+	cfg = loadConfiguredPlugins(cfg, s.GetMetadata().CWD)
 	return assemble(ctx, s, cfg)
 }
 
@@ -256,32 +256,43 @@ func Open(ctx context.Context, opts OpenOptions) (*Orchestrator, error) {
 	}
 
 	cfg := runtimeConfig{
-		model:              opts.Model,
-		modelID:            opts.ModelID,
-		modelProvider:      opts.ModelProvider,
-		provider:           opts.Provider,
-		repo:               opts.Repo,
-		thinkingLevel:      opts.ThinkingLevel,
-		systemPrompt:       opts.SystemPrompt,
-		appendSystemPrompt: opts.AppendSystemPrompt,
-		getAPIKey:          opts.GetAPIKey,
-		settings:           cloneSettings(opts.Settings),
-		settingsManager:    opts.SettingsManager,
-		extensions:         opts.Extensions,
-		hooksPath:          opts.HooksPath,
-		tools:              opts.Tools,
-		toolBuilder:        opts.ToolBuilder,
-		promptTemplates:    opts.PromptTemplates,
-		skills:             opts.Skills,
-		promptPaths:        append([]string(nil), opts.PromptPaths...),
-		skillPaths:         append([]string(nil), opts.SkillPaths...),
-		agentDir:           opts.AgentDir,
-		contextFiles:       opts.ContextFiles,
-		diagnostics:        append([]resource.ResourceDiagnostic(nil), opts.Diagnostics...),
-		executionEnv:       opts.ExecutionEnv,
-		recoverState:       true,
+		model:               opts.Model,
+		modelID:             opts.ModelID,
+		modelProvider:       opts.ModelProvider,
+		provider:            opts.Provider,
+		repo:                opts.Repo,
+		thinkingLevel:       opts.ThinkingLevel,
+		systemPrompt:        opts.SystemPrompt,
+		appendSystemPrompt:  opts.AppendSystemPrompt,
+		getAPIKey:           opts.GetAPIKey,
+		settings:            cloneSettings(opts.Settings),
+		settingsManager:     opts.SettingsManager,
+		staticPluginSources: opts.Plugins,
+		hooksPath:           opts.HooksPath,
+		tools:               opts.Tools,
+		promptTemplates:     opts.PromptTemplates,
+		skills:              opts.Skills,
+		promptPaths:         append([]string(nil), opts.PromptPaths...),
+		skillPaths:          append([]string(nil), opts.SkillPaths...),
+		agentDir:            opts.AgentDir,
+		contextFiles:        opts.ContextFiles,
+		diagnostics:         append([]resource.ResourceDiagnostic(nil), opts.Diagnostics...),
+		executionEnv:        opts.ExecutionEnv,
+		recoverState:        true,
 	}
+	cfg = loadConfiguredPlugins(cfg, s.GetMetadata().CWD)
 	return assemble(ctx, s, cfg)
+}
+
+func loadConfiguredPlugins(cfg runtimeConfig, cwd string) runtimeConfig {
+	settings := cfg.settings
+	if cfg.settingsManager != nil {
+		settings = cfg.settingsManager.Settings()
+	}
+	plugins := plugin.Load(settings, cfg.agentDir, cwd)
+	cfg.filePluginSources = append([]PluginSource(nil), plugins.Sources...)
+	cfg.diagnostics = append(cfg.diagnostics, plugins.Diagnostics...)
+	return cfg
 }
 
 func assemble(ctx context.Context, s harness.Session, cfg runtimeConfig) (*Orchestrator, error) {
@@ -339,6 +350,9 @@ func assemble(ctx context.Context, s harness.Session, cfg runtimeConfig) (*Orche
 		autoCompactionEnabled = autoCompactionEnabledFrom(settings)
 	}
 
+	pluginSources := append([]PluginSource(nil), cfg.staticPluginSources...)
+	pluginSources = append(pluginSources, cfg.filePluginSources...)
+
 	// pi defaults both queue modes to one-at-a-time when settings omit them:
 	// .agents/references/pi/packages/agent/src/agent.ts:212-213 and
 	// .agents/references/pi/packages/coding-agent/src/core/settings-manager.ts:613-624.
@@ -359,8 +373,8 @@ func assemble(ctx context.Context, s harness.Session, cfg runtimeConfig) (*Orche
 		commands:              map[string]extension.CommandDefinition{},
 		baseProvider:          baseProvider,
 		baseToolDefs:          append([]extension.ToolDefinition(nil), cfg.tools...),
-		toolBuilder:           cfg.toolBuilder,
-		extensions:            append([]ExtensionSource(nil), cfg.extensions...),
+		staticPluginSources:   append([]PluginSource(nil), cfg.staticPluginSources...),
+		pluginSources:         append([]PluginSource(nil), pluginSources...),
 		hooksPath:             cfg.hooksPath,
 		customSystemPrompt:    cfg.systemPrompt,
 		promptTemplates:       append([]resource.PromptTemplate(nil), cfg.promptTemplates...),
@@ -413,10 +427,10 @@ func assemble(ctx context.Context, s harness.Session, cfg runtimeConfig) (*Orche
 		}
 	}
 
-	allExtensions := append([]ExtensionSource(nil), cfg.extensions...)
+	allPlugins := append([]PluginSource(nil), pluginSources...)
 
-	bindExtension := func(ext extension.Extension) error {
-		if err := o.bindExtensionCommands(ext); err != nil {
+	bindPlugin := func(ext extension.Extension) error {
+		if err := o.bindPluginCommands(ext); err != nil {
 			return err
 		}
 		if err := registerExtensionProviders(prov, ext.Providers); err != nil {
@@ -430,24 +444,24 @@ func assemble(ctx context.Context, s harness.Session, cfg runtimeConfig) (*Orche
 		return nil
 	}
 
-	for _, source := range allExtensions {
+	for _, source := range allPlugins {
 		loadErr := func() error {
 			if source.Factory == nil {
-				return fmt.Errorf("extension %q missing factory", source.Path)
+				return fmt.Errorf("plugin %q missing factory", source.Path)
 			}
 			ext, err := extension.Load(source.Path, hooks, ctxFactory, source.Factory)
 			if err != nil {
 				return err
 			}
-			return bindExtension(ext)
+			return bindPlugin(ext)
 		}()
 		if loadErr != nil {
-			// pi records a per-extension load error and keeps loading the
+			// pi records a per-plugin load error and keeps loading the
 			// rest; the agent starts with whatever loaded successfully
 			// (loader.ts:380-438).
 			o.diagnostics = append(o.diagnostics, resource.ResourceDiagnostic{
 				Type:    resource.DiagnosticError,
-				Message: fmt.Sprintf("Failed to load extension: %s", loadErr),
+				Message: fmt.Sprintf("Failed to load plugin: %s", loadErr),
 				Path:    source.Path,
 			})
 		}
@@ -1084,10 +1098,9 @@ func (o *Orchestrator) ReloadSettings(ctx context.Context) error {
 	getAPIKey := o.getAPIKey
 	repo := o.repo
 	customSystemPrompt := o.customSystemPrompt
-	extensions := append([]ExtensionSource(nil), o.extensions...)
+	staticPluginSources := append([]PluginSource(nil), o.staticPluginSources...)
 	hooksPath := o.hooksPath
 	baseToolDefs := append([]extension.ToolDefinition(nil), o.baseToolDefs...)
-	toolBuilder := o.toolBuilder
 	agentDir := o.agentDir
 	contextFiles := append([]resource.ContextFile(nil), o.contextFiles...)
 	execEnv := o.execEnv
@@ -1120,14 +1133,6 @@ func (o *Orchestrator) ReloadSettings(ctx context.Context) error {
 		return err
 	}
 	plugins := plugin.Load(settings, agentDirForLoad, cwd)
-	extensions = reloadPluginExtensions(extensions, plugins.Sources)
-	if toolBuilder != nil {
-		reloadedTools, err := toolBuilder(plugins.BinDirs)
-		if err != nil {
-			return fmt.Errorf("orchestrator: reload tools: %w", err)
-		}
-		baseToolDefs = reloadedTools
-	}
 	if baseProvider == nil {
 		baseProvider = defaultProviderRegistry(model, getAPIKey)
 	}
@@ -1142,10 +1147,10 @@ func (o *Orchestrator) ReloadSettings(ctx context.Context) error {
 		getAPIKey:              getAPIKey,
 		settings:               cloneSettings(settings),
 		settingsManager:        settingsManager,
-		extensions:             extensions,
+		staticPluginSources:    staticPluginSources,
+		filePluginSources:      plugins.Sources,
 		hooksPath:              hooksPath,
 		tools:                  baseToolDefs,
-		toolBuilder:            toolBuilder,
 		promptTemplates:        base.promptTemplates,
 		skills:                 base.skills,
 		promptPaths:            promptPaths,
@@ -1196,8 +1201,8 @@ func (o *Orchestrator) ReloadSettings(ctx context.Context) error {
 	o.tools = fresh.tools
 	o.toolDefs = fresh.toolDefs
 	o.baseToolDefs = fresh.baseToolDefs
-	o.toolBuilder = fresh.toolBuilder
-	o.extensions = fresh.extensions
+	o.staticPluginSources = append([]PluginSource(nil), fresh.staticPluginSources...)
+	o.pluginSources = append([]PluginSource(nil), fresh.pluginSources...)
 	o.hooksPath = fresh.hooksPath
 	o.commands = fresh.commands
 	o.customSystemPrompt = fresh.customSystemPrompt
@@ -1217,16 +1222,6 @@ func (o *Orchestrator) ReloadSettings(ctx context.Context) error {
 
 	o.emitResourcesUpdate(ctx, current, previous)
 	return nil
-}
-
-func reloadPluginExtensions(existing []ExtensionSource, plugins []ExtensionSource) []ExtensionSource {
-	next := make([]ExtensionSource, 0, len(existing)+len(plugins))
-	for _, source := range existing {
-		if !strings.HasPrefix(source.Path, "plugin:") {
-			next = append(next, source)
-		}
-	}
-	return append(next, plugins...)
 }
 
 func loadBaseResources(

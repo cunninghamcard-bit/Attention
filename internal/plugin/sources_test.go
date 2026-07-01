@@ -28,11 +28,11 @@ func TestLoadFilePluginSourcesHooksBinAndResources(t *testing.T) {
 	if len(result.Sources) != 1 {
 		t.Fatalf("sources = %d, want 1", len(result.Sources))
 	}
-	if result.Sources[0].Path != sourcePathPrefix+"rtk-optimizer" || result.Sources[0].Factory == nil {
+	if result.Sources[0].Path != root || result.Sources[0].Factory == nil {
 		t.Fatalf("source = %#v, want plugin source", result.Sources[0])
 	}
-	if len(result.BinDirs) != 1 || result.BinDirs[0] != filepath.Join(root, binDirName) {
-		t.Fatalf("bin dirs = %#v, want plugin bin", result.BinDirs)
+	if dirs := BinDirs(result.Sources); len(dirs) != 1 || dirs[0] != filepath.Join(root, binDirName) {
+		t.Fatalf("bin dirs = %#v, want plugin bin", dirs)
 	}
 
 	reg := hook.NewRegistry()
@@ -93,8 +93,8 @@ func TestLoadProjectPluginOverridesGlobalPlugin(t *testing.T) {
 	if len(result.Diagnostics) != 0 {
 		t.Fatalf("diagnostics = %#v, want none", result.Diagnostics)
 	}
-	if len(result.BinDirs) != 1 || result.BinDirs[0] != filepath.Join(projectRoot, binDirName) {
-		t.Fatalf("bin dirs = %#v, want project plugin bin", result.BinDirs)
+	if dirs := BinDirs(result.Sources); len(dirs) != 1 || dirs[0] != filepath.Join(projectRoot, binDirName) {
+		t.Fatalf("bin dirs = %#v, want project plugin bin", dirs)
 	}
 }
 

@@ -18,6 +18,9 @@ type AgentBackend interface {
 	RunStreaming(ctx context.Context, sessionID string, userMessage string) iter.Seq2[*session.Event, error]
 	// CreateSession creates a new session and returns its ID.
 	CreateSession(ctx context.Context) (string, error)
+	FetchCommands() []CommandInfo
+	Reload() (string, error)
+	DispatchCommand(name, args string) (commandDispatchResult, error)
 }
 
 // Skill is a minimal local stand-in for pi-go's extension.Skill. The slash

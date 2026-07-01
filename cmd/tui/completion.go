@@ -39,7 +39,7 @@ type CompleteResult struct {
 // The command list (commands) is the kernel's get_commands result, used VERBATIM
 // as the SINGLE source of truth — completion matches "/<prefix>" against the
 // kernel command names. Since that list already includes skills (source=="skill"),
-// builtins, prompts and extensions, no separate skill matching is needed for the
+// builtins, prompts and plugins, no separate skill matching is needed for the
 // slash list. specs (file-backed /run, /plan) still scan workDir.
 func Complete(input string, commands []CommandInfo, workDir string) *CompleteResult {
 	if input == "" {

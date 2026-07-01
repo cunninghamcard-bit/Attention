@@ -9,6 +9,7 @@ import (
 	"unicode"
 
 	"github.com/charmbracelet/glamour"
+	"github.com/charmbracelet/glamour/styles"
 	"github.com/charmbracelet/x/ansi"
 
 	"charm.land/lipgloss/v2"
@@ -143,6 +144,18 @@ func NewChatModel(renderer *glamour.TermRenderer) ChatModel {
 	}
 }
 
+func newMarkdownRenderer(width int) *glamour.TermRenderer {
+	if width < 40 {
+		width = 40
+	}
+	renderer, _ := glamour.NewTermRenderer(
+		glamour.WithStandardStyle(styles.TokyoNightStyle),
+		glamour.WithWordWrap(width),
+		glamour.WithEmoji(),
+	)
+	return renderer
+}
+
 // Clear removes all messages and resets scroll.
 func (c *ChatModel) Clear() {
 	c.Messages = c.Messages[:0]
@@ -214,14 +227,7 @@ func (c *ChatModel) MaxScroll(height int) int {
 func (c *ChatModel) UpdateRenderer(width int) {
 	c.Width = width
 	c.ToolDisplay.Width = width
-	if width < 40 {
-		width = 40
-	}
-	c.Renderer, _ = glamour.NewTermRenderer(
-		glamour.WithAutoStyle(),
-		glamour.WithWordWrap(width),
-		glamour.WithEmoji(),
-	)
+	c.Renderer = newMarkdownRenderer(width)
 	// Invalidate render caches — width changed so all cached output is stale.
 	c.invalidateRenderCaches()
 }

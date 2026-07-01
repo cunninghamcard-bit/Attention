@@ -128,7 +128,7 @@ type wireAvailableModels struct {
 }
 
 // wireGetCommands is the get_commands response data we read. Each command
-// carries a source ("extension"/"prompt"/"skill"); skills are the entries with
+// carries a source ("plugin"/"prompt"/"skill"); skills are the entries with
 // source=="skill".
 type wireGetCommands struct {
 	Commands []wireCommand `json:"commands"`
@@ -464,7 +464,7 @@ func (a *rpcAgent) CreateSession(ctx context.Context) (string, error) {
 // CommandInfo is one kernel command entry from get_commands, used VERBATIM as
 // the single source of truth for slash-command completion and dispatch. Name is
 // the kernel's exact command name (e.g. "compact", "skill:review"); Source is
-// the kernel's classification ("builtin"/"prompt"/"skill"/"extension").
+// the kernel's classification ("builtin"/"prompt"/"skill"/"plugin").
 type CommandInfo struct {
 	Name        string
 	Description string
@@ -547,7 +547,7 @@ func (a *rpcAgent) Clone() (string, error) {
 	return "Cloned the current session.", nil
 }
 
-// Reload reloads keybindings, extensions, skills, prompts, and themes.
+// Reload reloads keybindings, plugins, skills, prompts, and themes.
 func (a *rpcAgent) Reload() (string, error) {
 	resp, err := a.requestTimeout("reload", map[string]any{}, builtinActionTimeout)
 	if err != nil {
@@ -556,7 +556,7 @@ func (a *rpcAgent) Reload() (string, error) {
 	if !resp.Success {
 		return "", errors.New(resp.Error)
 	}
-	return "Reloaded keybindings, extensions, skills, prompts, and themes.", nil
+	return "Reloaded keybindings, plugins, skills, prompts, and themes.", nil
 }
 
 // AvailableModels returns the kernel's configured models as picker rows.

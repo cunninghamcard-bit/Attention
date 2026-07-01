@@ -22,7 +22,6 @@ import (
 	rpcmode "github.com/cunninghamcard-bit/Attention/internal/mode/rpc"
 	"github.com/cunninghamcard-bit/Attention/internal/obs"
 	"github.com/cunninghamcard-bit/Attention/internal/orchestrator"
-	"github.com/cunninghamcard-bit/Attention/internal/plugin"
 	"github.com/cunninghamcard-bit/Attention/internal/provider"
 	"github.com/cunninghamcard-bit/Attention/internal/resource"
 	"github.com/cunninghamcard-bit/Attention/internal/session"
@@ -287,9 +286,6 @@ func run(ctx context.Context) error {
 		projectContext, contextDiagnostics = resource.LoadContextFiles(cwd, cfg.AgentDir)
 		resourceDiagnostics = append(resourceDiagnostics, contextDiagnostics...)
 	}
-	plugins := plugin.Load(settings, cfg.AgentDir, cwd)
-	resourceDiagnostics = append(resourceDiagnostics, plugins.Diagnostics...)
-	logResourceDiagnostics(os.Stderr, resourceDiagnostics)
 	obs.Time("context/skills/templates load")
 
 	// Declarative shell hooks live at <agentDir>/hooks.json; a missing file is
@@ -299,20 +295,16 @@ func run(ctx context.Context) error {
 	// Tool selection: --no-tools/--no-builtin-tools/--tools/--exclude-tools.
 	// Precedence and base sets are handled in selectTools (flags.go). The full
 	// tool set is passed as a thunk so it is only built when --tools is given.
-	selectedTools := toolSelection{
-		tools:         splitCommaList(*toolsFlag),
-		excludeTools:  splitCommaList(*excludeToolsFlag),
-		noTools:       *noToolsFlag,
-		noBuiltinTool: *noBuiltinToolsFlag,
-	}
-	buildTools := func(pluginBinDirs []string) ([]extension.ToolDefinition, error) {
-		return selectTools(
-			selectedTools,
-			baseToolSet(env, shellCommandPrefix, pluginBinDirs...),
-			func() []extension.ToolDefinition { return allToolSet(env, shellCommandPrefix, pluginBinDirs...) },
-		)
-	}
-	tools, err := buildTools(plugins.BinDirs)
+	tools, err := selectTools(
+		toolSelection{
+			tools:         splitCommaList(*toolsFlag),
+			excludeTools:  splitCommaList(*excludeToolsFlag),
+			noTools:       *noToolsFlag,
+			noBuiltinTool: *noBuiltinToolsFlag,
+		},
+		baseToolSet(env, shellCommandPrefix),
+		func() []extension.ToolDefinition { return allToolSet(env, shellCommandPrefix) },
+	)
 	if err != nil {
 		return err
 	}
@@ -343,14 +335,13 @@ func run(ctx context.Context) error {
 		Diagnostics:        resourceDiagnostics,
 		ExecutionEnv:       env,
 		Tools:              tools,
-		ToolBuilder:        buildTools,
-		Extensions:         plugins.Sources,
 	}
 
 	orch, err := buildOrchestrator(ctx, repo, plan, common)
 	if err != nil {
 		return fmt.Errorf("create orchestrator: %w", err)
 	}
+	logResourceDiagnostics(os.Stderr, orch.ResourceDiagnostics())
 	// --name sets the display name on a freshly created session (new or forked);
 	// pi sets the name right after the session is created.
 	if name := strings.TrimSpace(*nameFlag); name != "" && (plan.kind == planNew || plan.kind == planFork) {

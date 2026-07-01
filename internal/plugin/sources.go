@@ -16,7 +16,6 @@ import (
 
 type Result struct {
 	Sources     []internalextension.Source
-	BinDirs     []string
 	Diagnostics []resource.ResourceDiagnostic
 }
 
@@ -31,7 +30,6 @@ const (
 	userPluginDirName  = "plugins"
 	manifestDir        = ".attention-plugin"
 	manifestFileName   = "plugin.json"
-	sourcePathPrefix   = "plugin:"
 	binDirName         = "bin"
 	hooksDirName       = "hooks"
 	hooksFileName      = "hooks.json"
@@ -49,16 +47,25 @@ func Load(settings config.Settings, agentDir string, cwd string) Result {
 	names := settingsStringSlice(settings, settingsPluginsKey)
 	result := Result{
 		Sources:     []internalextension.Source{},
-		BinDirs:     []string{},
 		Diagnostics: []resource.ResourceDiagnostic{},
 	}
 	for _, name := range names {
 		loaded := loadOne(name, agentDir, cwd)
 		result.Sources = append(result.Sources, loaded.Sources...)
-		result.BinDirs = append(result.BinDirs, loaded.BinDirs...)
 		result.Diagnostics = append(result.Diagnostics, loaded.Diagnostics...)
 	}
 	return result
+}
+
+func BinDirs(sources []internalextension.Source) []string {
+	dirs := []string{}
+	for _, source := range sources {
+		if !manifestExists(source.Path) {
+			continue
+		}
+		dirs = append(dirs, existingDirs(filepath.Join(source.Path, binDirName))...)
+	}
+	return uniqueCleanDirs(dirs)
 }
 
 func loadOne(name string, agentDir string, cwd string) Result {
@@ -83,7 +90,7 @@ func loadOne(name string, agentDir string, cwd string) Result {
 	diagnostics := append(hookDiagnostics, commandDiagnostics...)
 
 	source := internalextension.Source{
-		Path: sourcePathPrefix + manifest.Name,
+		Path: root,
 		Factory: func(api internalextension.ExtensionAPI) error {
 			if hooks != nil {
 				for _, handler := range hooks.Handlers() {
@@ -109,7 +116,6 @@ func loadOne(name string, agentDir string, cwd string) Result {
 	}
 	return Result{
 		Sources:     []internalextension.Source{source},
-		BinDirs:     binDirs,
 		Diagnostics: diagnostics,
 	}
 }

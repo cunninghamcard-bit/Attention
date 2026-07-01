@@ -44,7 +44,7 @@ var builtinSlashCommands = []SlashCommand{
 	{Name: "new", Description: "Start a new session", Source: "builtin"},
 	{Name: "compact", Description: "Manually compact the session context", Source: "builtin"},
 	{Name: "resume", Description: "Resume a different session", Source: "builtin"},
-	{Name: "reload", Description: "Reload keybindings, extensions, skills, prompts, and themes", Source: "builtin"},
+	{Name: "reload", Description: "Reload keybindings, plugins, skills, prompts, and themes", Source: "builtin"},
 }
 
 // CycleModel mirrors pi cycle_model -> _cycleAvailableModel:
@@ -168,8 +168,8 @@ func (o *Orchestrator) LastAssistantText() (string, bool) {
 func (o *Orchestrator) SlashCommands() []SlashCommand {
 	o.mu.Lock()
 	enableSkillCommands := enableSkillCommandsFrom(o.settings)
-	extensionCommands := make(map[string]extension.CommandDefinition, len(o.commands))
-	maps.Copy(extensionCommands, o.commands)
+	pluginCommands := make(map[string]extension.CommandDefinition, len(o.commands))
+	maps.Copy(pluginCommands, o.commands)
 	promptTemplates := append([]resource.PromptTemplate(nil), o.promptTemplates...)
 	skills := append([]resource.Skill(nil), o.skills...)
 	o.mu.Unlock()
@@ -181,23 +181,23 @@ func (o *Orchestrator) SlashCommands() []SlashCommand {
 	commands := make(
 		[]SlashCommand,
 		0,
-		len(builtinSlashCommands)+len(extensionCommands)+len(promptTemplates)+skillCommandCount,
+		len(builtinSlashCommands)+len(pluginCommands)+len(promptTemplates)+skillCommandCount,
 	)
 	commands = append(commands, builtinSlashCommands...)
 
-	extensionNames := make([]string, 0, len(extensionCommands))
-	for name := range extensionCommands {
-		extensionNames = append(extensionNames, name)
+	pluginNames := make([]string, 0, len(pluginCommands))
+	for name := range pluginCommands {
+		pluginNames = append(pluginNames, name)
 	}
-	sort.Strings(extensionNames)
-	for _, name := range extensionNames {
-		def := extensionCommands[name]
+	sort.Strings(pluginNames)
+	for _, name := range pluginNames {
+		def := pluginCommands[name]
 		commands = append(commands, SlashCommand{
 			Name:         name,
 			Description:  def.Description,
 			ArgumentHint: def.ArgumentHint,
-			Source:       "extension",
-			// pi tags extension commands with sourceInfo:
+			Source:       "plugin",
+			// pi tags plugin commands with sourceInfo:
 			// .agents/references/pi/packages/coding-agent/src/modes/rpc/rpc-mode.ts:635-641.
 			SourceInfo: def.Source,
 		})

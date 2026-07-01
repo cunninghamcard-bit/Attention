@@ -137,13 +137,13 @@ func toolNames(defs []extension.ToolDefinition) []string {
 }
 
 // baseToolSet is the default tool set when no tool flags constrain it.
-func baseToolSet(env execenv.ExecutionEnv, shellCommandPrefix string, extraBinDirs ...string) []extension.ToolDefinition {
-	return builtin.NewCodingTools(env, shellCommandPrefix, extraBinDirs...)
+func baseToolSet(env execenv.ExecutionEnv, shellCommandPrefix string) []extension.ToolDefinition {
+	return builtin.NewCodingTools(env, shellCommandPrefix)
 }
 
 // allToolSet is the full tool set used as the --tools allowlist source.
-func allToolSet(env execenv.ExecutionEnv, shellCommandPrefix string, extraBinDirs ...string) []extension.ToolDefinition {
-	return builtin.NewAllTools(env, shellCommandPrefix, extraBinDirs...)
+func allToolSet(env execenv.ExecutionEnv, shellCommandPrefix string) []extension.ToolDefinition {
+	return builtin.NewAllTools(env, shellCommandPrefix)
 }
 
 // splitCommaList parses a comma-separated flag value into trimmed, non-empty

@@ -68,8 +68,10 @@ func NewBashTool(env execenv.ExecutionEnv, commandPrefix string, extraBinDirs ..
 		Parameters:    schema[bashToolArgs](),
 		Label:         "bash",
 		PromptSnippet: "Run a bash command and return its output",
-		Execute: func(ctx context.Context, call extension.ToolCall, onUpdate tool.UpdateCallback, _ extension.ExtensionContext) (tool.Result, error) {
-			return executeBash(ctx, env, commandPrefix, extraBinDirs, call.Args, onUpdate), nil
+		Execute: func(ctx context.Context, call extension.ToolCall, onUpdate tool.UpdateCallback, extCtx extension.ExtensionContext) (tool.Result, error) {
+			binDirs := append([]string(nil), extraBinDirs...)
+			binDirs = append(binDirs, extCtx.PluginBinDirs...)
+			return executeBash(ctx, env, commandPrefix, binDirs, call.Args, onUpdate), nil
 		},
 	}
 }
