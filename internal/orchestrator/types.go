@@ -295,10 +295,11 @@ type AbortResult struct {
 
 // SlashCommand is a prompt-invokable command exposed to rpc get_commands.
 type SlashCommand struct {
-	Name        string
-	Description string
-	Source      string
-	SourceInfo  resource.SourceInfo
+	Name         string
+	Description  string
+	ArgumentHint string
+	Source       string
+	SourceInfo   resource.SourceInfo
 }
 
 // CompactOptions controls Harness.Compact.

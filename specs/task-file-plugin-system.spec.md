@@ -27,7 +27,18 @@ engine or compile an RTK-specific Go extension.
 - `hookSpecificOutput.updatedInput` mutates `PreToolUse` input.
 - Plugin `bin/` directories are added to Bash PATH and hook command PATH.
 - Plugin `skills/` directories are loaded through the existing skill loader.
-- Plugin `commands/` directories are loaded through the existing prompt-template command loader.
+- Plugin `commands/*.md` files are loaded through the existing prompt-template command loader.
+- Plugin `commands/commands.json` registers handler slash commands through the
+  existing extension command path.
+- Handler commands support only `{ "type": "command" }` in this phase. They run
+  the declared command/args directly with a default 10s timeout unless
+  `timeout` is set in seconds.
+- Handler stdin is JSON with `command_name`, `args`, `session_id`, and `cwd`.
+- Handler stdout must be JSON. `notifications: [{ level, message }]` are routed
+  through existing command dispatch notifications; non-JSON stdout is a command
+  error.
+- Handler env includes `ATTENTION_PLUGIN_ROOT`, `ATTENTION_PROJECT_DIR`,
+  `ATTENTION_AGENT_DIR`, and plugin `bin/` prepended to `PATH`.
 - Do not add a JavaScript or TypeScript extension host in this phase.
 - Do not add an RTK Go port.
 
@@ -79,6 +90,22 @@ Scenario: plugin resources are discovered through existing loaders
   When `resources_discover` runs
   Then the result includes the plugin skill path
   And the result includes the plugin command path
+
+Scenario: plugin command registry is loaded
+  Test: TestLoadFilePluginSourcesHooksBinAndResources
+  Given a plugin has `commands/commands.json`
+  When the file plugin loader resolves settings
+  Then the resulting extension registers the declared command handler metadata
+
+Scenario: plugin handler command dispatches notifications
+  Test: TestReloadSettingsLoadsNewlyEnabledFilePlugin
+  Given a newly enabled plugin has `commands/commands.json`
+  And the declared handler executable is in the plugin `bin/` directory
+  When settings are reloaded and the command is dispatched
+  Then `get_commands` can see the handler command
+  And the handler receives command stdin and plugin env
+  And JSON stdout notifications are returned through dispatch
+  And non-JSON stdout returns a command error
 
 Scenario: plugin hook commands are lazy at startup
   Test: TestFilePluginHookCommandDoesNotBreakStartup

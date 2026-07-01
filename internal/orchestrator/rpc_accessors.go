@@ -7,9 +7,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/cunninghamcard-bit/Attention/internal/extension"
 	"github.com/cunninghamcard-bit/Attention/internal/agentloop"
 	"github.com/cunninghamcard-bit/Attention/internal/ai"
+	"github.com/cunninghamcard-bit/Attention/internal/extension"
 	"github.com/cunninghamcard-bit/Attention/internal/resource"
 	"github.com/cunninghamcard-bit/Attention/internal/session"
 )
@@ -193,9 +193,10 @@ func (o *Orchestrator) SlashCommands() []SlashCommand {
 	for _, name := range extensionNames {
 		def := extensionCommands[name]
 		commands = append(commands, SlashCommand{
-			Name:        name,
-			Description: def.Description,
-			Source:      "extension",
+			Name:         name,
+			Description:  def.Description,
+			ArgumentHint: def.ArgumentHint,
+			Source:       "extension",
 			// pi tags extension commands with sourceInfo:
 			// .agents/references/pi/packages/coding-agent/src/modes/rpc/rpc-mode.ts:635-641.
 			SourceInfo: def.Source,
@@ -204,10 +205,11 @@ func (o *Orchestrator) SlashCommands() []SlashCommand {
 
 	for _, template := range promptTemplates {
 		commands = append(commands, SlashCommand{
-			Name:        template.Name,
-			Description: template.Description,
-			Source:      "prompt",
-			SourceInfo:  template.Source,
+			Name:         template.Name,
+			Description:  template.Description,
+			ArgumentHint: template.ArgumentHint,
+			Source:       "prompt",
+			SourceInfo:   template.Source,
 		})
 	}
 

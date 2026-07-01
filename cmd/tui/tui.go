@@ -1484,6 +1484,37 @@ type extensionCommandDispatcher interface {
 	DispatchCommand(name, args string) (commandDispatchResult, error)
 }
 
+type reloadAgent interface {
+	Reload() (string, error)
+}
+
+type commandListAgent interface {
+	FetchCommands() []CommandInfo
+}
+
+func skillsFromCommands(commands []CommandInfo) []Skill {
+	skills := make([]Skill, 0)
+	for _, c := range commands {
+		if c.Source != "skill" {
+			continue
+		}
+		skills = append(skills, Skill{
+			Name:        strings.TrimPrefix(c.Name, "skill:"),
+			Description: c.Description,
+			Source:      "user",
+		})
+	}
+	return skills
+}
+
+func (m *model) replaceCommands(commands []CommandInfo) {
+	m.cfg.Commands = commands
+	m.inputModel.Commands = commands
+	skills := skillsFromCommands(commands)
+	m.cfg.Skills = skills
+	m.inputModel.Skills = skills
+}
+
 func (m *model) dispatchExtensionCommand(name, args string) (tea.Model, tea.Cmd) {
 	agent, ok := m.cfg.Agent.(extensionCommandDispatcher)
 	if !ok {
@@ -1513,6 +1544,28 @@ func (m *model) dispatchExtensionCommand(name, args string) (tea.Model, tea.Cmd)
 // Actions needing an interactive selector (model/fork/tree/resume) open an item
 // picker that drives the corresponding rpc when the user selects a row.
 func (m *model) dispatchBuiltin(name, args string) (tea.Model, tea.Cmd) {
+	if name == "reload" {
+		agent, ok := m.cfg.Agent.(reloadAgent)
+		if !ok {
+			m.chatModel.AppendWarning(fmt.Sprintf("/%s is not available (no kernel backend)", name))
+			return m, nil
+		}
+		notice, err := agent.Reload()
+		if err != nil {
+			m.chatModel.AppendWarning(fmt.Sprintf("/%s failed: %v", name, err))
+			return m, nil
+		}
+		if fetcher, ok := m.cfg.Agent.(commandListAgent); ok {
+			if commands := fetcher.FetchCommands(); commands != nil {
+				m.replaceCommands(commands)
+			} else {
+				m.chatModel.AppendWarning("Reloaded, but command list refresh failed.")
+			}
+		}
+		m.chatModel.AppendNotice(notice)
+		return m, nil
+	}
+
 	agent, ok := m.cfg.Agent.(*rpcAgent)
 	if !ok {
 		m.chatModel.AppendWarning(fmt.Sprintf("/%s is not available (no kernel backend)", name))
@@ -1530,8 +1583,6 @@ func (m *model) dispatchBuiltin(name, args string) (tea.Model, tea.Cmd) {
 		notice, err = agent.Compact()
 	case "clone":
 		notice, err = agent.Clone()
-	case "reload":
-		notice, err = agent.Reload()
 	case "model":
 		return m.openModelPicker(agent)
 	case "session":

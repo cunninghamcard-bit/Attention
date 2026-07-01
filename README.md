@@ -54,6 +54,33 @@ adds the plugin name to global settings:
 Project plugins at `.along/plugins/<name>` override global plugins at
 `~/.along/plugins/<name>`.
 
+Plugins can provide prompt-template slash commands as `commands/*.md`. They can
+also register executable handler commands with `commands/commands.json`:
+
+```json
+{
+  "commands": [
+    {
+      "name": "rtk",
+      "description": "Configure RTK",
+      "argumentHint": "[show]",
+      "handler": {
+        "type": "command",
+        "command": "node",
+        "args": ["${ATTENTION_PLUGIN_ROOT}/dist/rtk-command.mjs"],
+        "timeout": 8
+      }
+    }
+  ]
+}
+```
+
+Handler stdin is JSON with `command_name`, `args`, `session_id`, and `cwd`.
+Handler stdout must be JSON; `notifications` are returned through
+`dispatch_command`. The handler environment includes `ATTENTION_PLUGIN_ROOT`,
+`ATTENTION_PROJECT_DIR`, `ATTENTION_AGENT_DIR`, and the plugin `bin/` directory
+on `PATH`.
+
 Known test failures (all pre-existing at `a4702cc`, none are code regressions):
 - `internal/execenv/local` and `internal/resource` — macOS-only env quirks
   (symlinked `/var`, case-insensitive FS).

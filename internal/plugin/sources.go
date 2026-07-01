@@ -37,9 +37,11 @@ const (
 	hooksFileName      = "hooks.json"
 	skillsDirName      = "skills"
 	commandsDirName    = "commands"
+	commandsFileName   = "commands.json"
 
 	pluginRootEnv = "ATTENTION_PLUGIN_ROOT"
 	projectDirEnv = "ATTENTION_PROJECT_DIR"
+	agentDirEnv   = "ATTENTION_AGENT_DIR"
 	pathEnv       = "PATH"
 )
 
@@ -73,11 +75,12 @@ func loadOne(name string, agentDir string, cwd string) Result {
 	}
 
 	binDirs := existingDirs(filepath.Join(root, binDirName))
-	env := pluginEnv(root, cwd, binDirs)
+	env := pluginEnv(root, agentDir, cwd, binDirs)
 	hooks, hookDiagnostics := loadPluginHooks(root, env)
+	commands, commandDiagnostics := loadPluginCommands(root, env)
 	skillDirs := existingDirs(filepath.Join(root, skillsDirName))
 	commandDirs := existingDirs(filepath.Join(root, commandsDirName))
-	diagnostics := hookDiagnostics
+	diagnostics := append(hookDiagnostics, commandDiagnostics...)
 
 	source := internalextension.Source{
 		Path: sourcePathPrefix + manifest.Name,
@@ -97,6 +100,9 @@ func loadOne(name string, agentDir string, cwd string) Result {
 						PromptPaths: append([]string(nil), commandDirs...),
 					}, nil
 				})
+			}
+			for name, def := range commands {
+				api.RegisterCommand(name, def)
 			}
 			return nil
 		},
@@ -207,10 +213,12 @@ func loadPluginHooks(root string, env map[string]string) (*hook.ShellHooksRunner
 	}}
 }
 
-func pluginEnv(root string, cwd string, binDirs []string) map[string]string {
+func pluginEnv(root string, agentDir string, cwd string, binDirs []string) map[string]string {
 	env := map[string]string{
-		pluginRootEnv: root,
-		projectDirEnv: cwd,
+		pluginRootEnv:      root,
+		projectDirEnv:      cwd,
+		agentDirEnv:        agentDir,
+		config.EnvAgentDir: agentDir,
 	}
 	if len(binDirs) > 0 {
 		pathParts := append([]string(nil), binDirs...)

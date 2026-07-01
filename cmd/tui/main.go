@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"strings"
 )
 
 // appVersion is the viewer version reported in the status bar.
@@ -62,16 +61,7 @@ func run(alongPath string) error {
 	// sidebar's Skills section. Non-fatal: empty/nil on error.
 	cmds := agent.FetchCommands()
 	cfg.Commands = cmds
-	for _, c := range cmds {
-		if c.Source != "skill" {
-			continue
-		}
-		cfg.Skills = append(cfg.Skills, Skill{
-			Name:        strings.TrimPrefix(c.Name, "skill:"),
-			Description: c.Description,
-			Source:      "user",
-		})
-	}
+	cfg.Skills = skillsFromCommands(cmds)
 
 	return Run(ctx, cfg)
 }

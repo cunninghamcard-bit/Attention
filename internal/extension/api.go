@@ -72,9 +72,10 @@ type ToolDefinition struct {
 
 // CommandDefinition describes a slash-command registered by an extension.
 type CommandDefinition struct {
-	Description string
-	Source      resource.SourceInfo
-	Handler     func(context.Context, []string, ExtensionContext) error
+	Description  string
+	ArgumentHint string
+	Source       resource.SourceInfo
+	Handler      func(context.Context, []string, ExtensionContext) error
 }
 
 // ProviderDefinition describes a provider registered by an extension. It is an

@@ -848,10 +848,11 @@ type commandNotificationJSON struct {
 }
 
 type slashCommandJSON struct {
-	Name        string         `json:"name"`
-	Description string         `json:"description,omitempty"`
-	Source      string         `json:"source"`
-	SourceInfo  sourceInfoJSON `json:"sourceInfo"`
+	Name         string         `json:"name"`
+	Description  string         `json:"description,omitempty"`
+	ArgumentHint string         `json:"argumentHint,omitempty"`
+	Source       string         `json:"source"`
+	SourceInfo   sourceInfoJSON `json:"sourceInfo"`
 }
 
 type sourceInfoJSON struct {
@@ -862,10 +863,11 @@ type sourceInfoJSON struct {
 
 func slashCommandJSONFromOrchestrator(command orchestrator.SlashCommand) slashCommandJSON {
 	return slashCommandJSON{
-		Name:        command.Name,
-		Description: command.Description,
-		Source:      command.Source,
-		SourceInfo:  sourceInfoJSONFromResource(command.SourceInfo),
+		Name:         command.Name,
+		Description:  command.Description,
+		ArgumentHint: command.ArgumentHint,
+		Source:       command.Source,
+		SourceInfo:   sourceInfoJSONFromResource(command.SourceInfo),
 	}
 }
 

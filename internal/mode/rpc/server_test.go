@@ -690,8 +690,9 @@ func TestServeGetCommandsResponseShape(t *testing.T) {
 	target := &fakeTarget{
 		slashCommands: []orchestrator.SlashCommand{
 			{
-				Name:   "run",
-				Source: "extension",
+				Name:         "run",
+				ArgumentHint: "[args]",
+				Source:       "extension",
 			},
 			{
 				Name:        "deploy",
@@ -724,6 +725,9 @@ func TestServeGetCommandsResponseShape(t *testing.T) {
 	extensionCommand := commands[0].(map[string]any)
 	if extensionCommand["name"] != "run" || extensionCommand["source"] != "extension" {
 		t.Fatalf("extension command = %v", extensionCommand)
+	}
+	if extensionCommand["argumentHint"] != "[args]" {
+		t.Fatalf("extension command argumentHint = %v, want [args]", extensionCommand["argumentHint"])
 	}
 	extensionSourceInfo := extensionCommand["sourceInfo"].(map[string]any)
 	if extensionSourceInfo["kind"] != "" || extensionSourceInfo["path"] != "" {

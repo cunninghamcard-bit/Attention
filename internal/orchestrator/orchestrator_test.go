@@ -1271,6 +1271,7 @@ func TestReloadSettingsLoadsNewlyEnabledFilePlugin(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeDiscoveredPrompt(t, filepath.Join(pluginRoot, "commands"), "demo-command", "Use demo command")
+	writePluginHandlerCommand(t, pluginRoot, "handler-command", "Run handler")
 	writeSettingsFile(t, settingsPath, `{"plugins":["demo-plugin"]}`)
 
 	if err := o.ReloadSettings(ctx); err != nil {
@@ -1278,6 +1279,26 @@ func TestReloadSettingsLoadsNewlyEnabledFilePlugin(t *testing.T) {
 	}
 	if !hasSlashCommandNamed(o.SlashCommands(), "demo-command") {
 		t.Fatalf("SlashCommands missing demo-command after reload: %#v", o.SlashCommands())
+	}
+	handlerCommand := slashCommandNamed(o.SlashCommands(), "handler-command")
+	if handlerCommand == nil ||
+		handlerCommand.Description != "Run handler" ||
+		handlerCommand.ArgumentHint != "[args]" {
+		t.Fatalf("SlashCommands handler-command = %#v, want handler command with metadata", handlerCommand)
+	}
+	notifications, err := o.DispatchCommand(ctx, "handler-command", []string{"one", "two three"})
+	if err != nil {
+		t.Fatalf("DispatchCommand handler-command: %v", err)
+	}
+	if !reflect.DeepEqual(notifications, []CommandNotification{{Message: "handler ok", Level: "warning"}}) {
+		t.Fatalf("DispatchCommand notifications = %#v, want handler notification", notifications)
+	}
+	writePluginHandlerCommand(t, pluginRoot, "bad-command", "Bad handler")
+	if err := o.ReloadSettings(ctx); err != nil {
+		t.Fatalf("ReloadSettings bad command: %v", err)
+	}
+	if _, err := o.DispatchCommand(ctx, "bad-command", nil); err == nil || !strings.Contains(err.Error(), "non-JSON") {
+		t.Fatalf("DispatchCommand bad-command err = %v, want non-JSON error", err)
 	}
 }
 
@@ -1722,6 +1743,58 @@ func writeDiscoveredPrompt(t *testing.T, root string, name string, description s
 	return root
 }
 
+func writePluginHandlerCommand(t *testing.T, pluginRoot string, name string, description string) {
+	t.Helper()
+
+	binDir := filepath.Join(pluginRoot, "bin")
+	commandsDir := filepath.Join(pluginRoot, "commands")
+	if err := os.MkdirAll(binDir, 0o700); err != nil {
+		t.Fatalf("mkdir plugin bin: %v", err)
+	}
+	if err := os.MkdirAll(commandsDir, 0o700); err != nil {
+		t.Fatalf("mkdir plugin commands: %v", err)
+	}
+	script := `#!/bin/sh
+payload=$(cat)
+case "$payload" in *'"command_name":"` + name + `"'*) ;; *) echo "bad command"; exit 2;; esac
+test "$1" = "from-json" || exit 3
+test "$ATTENTION_PLUGIN_ROOT" = "$(cd "$(dirname "$0")/.." && pwd)" || exit 4
+test "$(cd "$ATTENTION_PROJECT_DIR" && pwd -P)" = "$(pwd -P)" || { echo "project=$ATTENTION_PROJECT_DIR pwd=$(pwd -P)" >&2; exit 5; }
+case ":$PATH:" in *":$ATTENTION_PLUGIN_ROOT/bin:"*) ;; *) exit 6;; esac
+test -n "$ATTENTION_AGENT_DIR" || exit 7
+test -n "$ALONG_CODING_AGENT_DIR" || exit 8
+`
+	if name == "bad-command" {
+		script += `printf 'not json'
+`
+	} else {
+		script += `printf '{"notifications":[{"level":"warning","message":"handler ok"}]}'
+`
+	}
+	scriptPath := filepath.Join(binDir, name)
+	if err := os.WriteFile(scriptPath, []byte(script), 0o700); err != nil {
+		t.Fatalf("write plugin handler: %v", err)
+	}
+	config := `{
+  "commands": [
+    {
+      "name": "` + name + `",
+      "description": "` + description + `",
+      "argumentHint": "[args]",
+      "handler": {
+        "type": "command",
+        "command": "` + name + `",
+        "args": ["from-json"],
+        "timeout": 8
+      }
+    }
+  ]
+}`
+	if err := os.WriteFile(filepath.Join(commandsDir, "commands.json"), []byte(config), 0o600); err != nil {
+		t.Fatalf("write commands.json: %v", err)
+	}
+}
+
 func assertResourcesDiscoverEvent(t *testing.T, event any, cwd string, reason string) {
 	t.Helper()
 
@@ -1753,12 +1826,16 @@ func hasPromptTemplateNamed(templates []resource.PromptTemplate, name string) bo
 }
 
 func hasSlashCommandNamed(commands []SlashCommand, name string) bool {
+	return slashCommandNamed(commands, name) != nil
+}
+
+func slashCommandNamed(commands []SlashCommand, name string) *SlashCommand {
 	for _, command := range commands {
 		if command.Name == name {
-			return true
+			return &command
 		}
 	}
-	return false
+	return nil
 }
 
 func TestSubscribeTranslatesLifecycleEvents(t *testing.T) {

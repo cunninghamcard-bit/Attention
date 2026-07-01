@@ -36,11 +36,18 @@ func TestLoadFilePluginSourcesHooksBinAndResources(t *testing.T) {
 	}
 
 	reg := hook.NewRegistry()
-	_, err := internalextension.Load(result.Sources[0].Path, reg, func(context.Context) internalextension.ExtensionContext {
+	ext, err := internalextension.Load(result.Sources[0].Path, reg, func(context.Context) internalextension.ExtensionContext {
 		return internalextension.ExtensionContext{SessionID: "sess-1"}
 	}, result.Sources[0].Factory)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
+	}
+	cmd, ok := ext.Commands["rtk"]
+	if !ok {
+		t.Fatalf("commands = %#v, want rtk handler command", ext.Commands)
+	}
+	if cmd.Description != "Configure RTK" || cmd.ArgumentHint != "[show]" {
+		t.Fatalf("command = %#v, want description and argument hint from commands.json", cmd)
 	}
 
 	patch, err := reg.Emit(context.Background(), hook.ToolCallEvent{
@@ -147,6 +154,20 @@ func writePluginFixture(t *testing.T, root string) {
       }
     ]
   }
+}`)
+	mustWrite(t, filepath.Join(root, commandsDirName, "commands.json"), `{
+  "commands": [
+    {
+      "name": "rtk",
+      "description": "Configure RTK",
+      "argumentHint": "[show]",
+      "handler": {
+        "type": "command",
+        "command": "rewrite-hook",
+        "timeout": 8
+      }
+    }
+  ]
 }`)
 	mustWrite(t, filepath.Join(root, binDirName, "rewrite-hook"), `#!/bin/sh
 cat >/dev/null
